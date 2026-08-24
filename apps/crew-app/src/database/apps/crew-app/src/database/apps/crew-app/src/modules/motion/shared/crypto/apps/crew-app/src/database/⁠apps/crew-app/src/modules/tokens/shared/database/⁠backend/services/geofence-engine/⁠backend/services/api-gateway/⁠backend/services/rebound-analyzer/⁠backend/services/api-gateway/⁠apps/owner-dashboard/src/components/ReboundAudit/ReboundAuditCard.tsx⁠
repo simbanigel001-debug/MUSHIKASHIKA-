@@ -1,0 +1,57 @@
+import React from 'react';
+
+interface AuditFlagProps {
+  shiftId: string;
+  detectedStops: number;
+  declaredPassengers: number;
+  estimatedMinimumPassengers: number;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  auditReason: string;
+}
+
+export const ReboundAuditCard: React.FC<{ flag: AuditFlagProps }> = ({ flag }) => {
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'HIGH': return 'bg-red-100 border-red-500 text-red-900';
+      case 'MEDIUM': return 'bg-orange-100 border-orange-500 text-orange-900';
+      default: return 'bg-yellow-100 border-yellow-500 text-yellow-900';
+    }
+  };
+
+  return (
+    <div className={`border-l-4 p-4 rounded shadow-sm mb-4 ${getSeverityColor(flag.severity)}`}>
+      <div className="flex justify-between items-center mb-2">
+        <h3 className="font-bold text-lg">⚠️ Rebound Trip Leakage Detected</h3>
+        <span className="px-2 py-1 text-xs font-bold rounded-full bg-white opacity-80 uppercase">
+          {flag.severity} RISK
+        </span>
+      </div>
+      
+      <p className="text-sm mb-4">{flag.auditReason}</p>
+      
+      <div className="grid grid-cols-3 gap-4 text-center bg-white bg-opacity-40 p-3 rounded">
+        <div>
+          <p className="text-xs uppercase font-semibold text-gray-600">Declared Load</p>
+          <p className="text-xl font-bold text-gray-800">{flag.declaredPassengers}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase font-semibold text-gray-600">Detected Stops</p>
+          <p className="text-xl font-bold text-gray-800">{flag.detectedStops}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase font-semibold text-gray-600">Est. Min Load</p>
+          <p className="text-xl font-bold text-red-600">{flag.estimatedMinimumPassengers}</p>
+        </div>
+      </div>
+      
+      <div className="mt-4 flex gap-2">
+        <button className="px-4 py-2 bg-gray-900 text-white rounded text-sm font-semibold hover:bg-gray-800 transition">
+          View GPS Map Route
+        </button>
+        <button className="px-4 py-2 bg-transparent border border-gray-900 text-gray-900 rounded text-sm font-semibold hover:bg-gray-100 transition">
+          Flag Crew for Audit
+        </button>
+      </div>
+    </div>
+  );
+};
