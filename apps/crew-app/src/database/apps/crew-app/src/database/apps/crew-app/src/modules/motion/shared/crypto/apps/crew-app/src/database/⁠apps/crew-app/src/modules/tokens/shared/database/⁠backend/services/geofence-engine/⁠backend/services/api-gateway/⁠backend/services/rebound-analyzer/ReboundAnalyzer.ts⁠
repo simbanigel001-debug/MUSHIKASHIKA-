@@ -1,0 +1,68 @@
+import { Pool } from 'pg';
+
+export interface AuditFlag {
+  shiftId: string;
+  tripSegmentId: string;
+  declaredPassengers: number;
+  detectedStops: number;
+  estimatedMinimumPassengers: number;
+  discrepancySeverity: 'LOW' | 'MEDIUM' | 'HIGH';
+  auditReason: string;
+}
+
+export class ReboundAnalyzer {
+  private dbPool: Pool;
+  
+  // Heuristic: A 30s+ roadside stop on a return route yields at least 1-2 passengers on average
+  private static PASSENGERS_PER_STOP_MODIFIER = 1.2; 
+
+  constructor(dbPool: Pool) {
+    this.dbPool = dbPool;
+  }
+
+  /**
+   * Analyzes a completed return trip segment for off-the-books loading (musana pickups)
+   */
+  public async analyzeReboundLeg(shiftId: string, tripSegmentId: string, declaredPassengers: number): Promise<AuditFlag | null> {
+    const client = await this.dbPool.connect();
+
+    try {
+      // Fetch all >30s dwell stops for this specific vehicle segment
+      const result = await client.query(`
+        SELECT count(*) as stop_count 
+        FROM telemetry_stops 
+        WHERE shift_id = $1 
+          AND dwell_duration_seconds >= 30
+          AND is_mock_location = false
+      `, [shiftId]);
+
+      const detectedStops = parseInt(result.rows[0].stop_count, 10);
+      
+      // Calculate algorithmic baseline expectation
+      const estimatedMinimumPassengers = Math.floor(detectedStops * ReboundAnalyzer.PASSENGERS_PER_STOP_MODIFIER);
+
+      // Evaluate fraud threshold
+      if (detectedStops > 0 && declaredPassengers < estimatedMinimumPassengers) {
+        let severity: 'LOW' | 'MEDIUM' | 'HIGH' = 'LOW';
+        const gap = estimatedMinimumPassengers - declaredPassengers;
+
+        if (gap >= 8) severity = 'HIGH'; // e.g. claiming 2 people when they stopped 10 times
+        else if (gap >= 4) severity = 'MEDIUM';
+
+        return {
+          shiftId,
+          tripSegmentId,
+          declaredPassengers,
+          detectedStops,
+          estimatedMinimumPassengers,
+          discrepancySeverity: severity,
+          auditReason: `Conductor declared ${declaredPassengers} passengers, but GPS telemetry detected ${detectedStops} distinct roadside loading stops.`,
+        };
+      }
+
+      return null; // Trip looks clean
+    } finally {
+      client.release();
+    }
+  }
+}
