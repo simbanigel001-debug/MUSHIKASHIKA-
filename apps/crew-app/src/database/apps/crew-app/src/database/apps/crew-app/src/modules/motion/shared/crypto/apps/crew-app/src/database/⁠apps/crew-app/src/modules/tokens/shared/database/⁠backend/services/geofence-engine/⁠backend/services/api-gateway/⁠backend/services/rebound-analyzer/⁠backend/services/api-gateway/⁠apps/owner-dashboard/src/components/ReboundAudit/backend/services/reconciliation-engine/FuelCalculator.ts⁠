@@ -1,0 +1,45 @@
+export interface FuelAuditResult {
+  claimedFuelCost: number;
+  expectedFuelLitres: number;
+  expectedFuelCost: number;
+  varianceAmount: number;
+  isFlaggedForFraud: boolean;
+  auditReason: string;
+}
+
+export class FuelCalculator {
+  // Baseline vehicle fuel economy (e.g., 10 km per Litre for a loaded Toyota HiAce/Quantum)
+  private static BASELINE_KM_PER_LITRE = 10.0;
+  private static FUEL_PRICE_PER_LITRE_USD = 1.60;
+  private static FRAUD_VARIANCE_THRESHOLD_USD = 5.00; // Flag if claimed fuel exceeds calculated baseline by $5+
+
+  /**
+   * Cross-references claimed fuel receipt against total GPS kilometers driven
+   */
+  public static calculateFuelVariance(
+    totalGpsDistanceKm: number,
+    claimedFuelCostUsd: number
+  ): FuelAuditResult {
+    // 1. Calculate expected fuel burn based on actual vehicle movement
+    const expectedFuelLitres = totalGpsDistanceKm / FuelCalculator.BASELINE_KM_PER_LITRE;
+    const expectedFuelCost = Math.round(expectedFuelLitres * FuelCalculator.FUEL_PRICE_PER_LITRE_USD * 100) / 100;
+
+    // 2. Compute variance
+    const varianceAmount = Math.round((claimedFuelCostUsd - expectedFuelCost) * 100) / 100;
+    const isFlaggedForFraud = varianceAmount > FuelCalculator.FRAUD_VARIANCE_THRESHOLD_USD;
+
+    let auditReason = 'Fuel purchase aligns with GPS distance traveled.';
+    if (isFlaggedForFraud) {
+      auditReason = `Fuel claim of $${claimedFuelCostUsd.toFixed(2)} exceeds expected consumption ($${expectedFuelCost.toFixed(2)}) for ${totalGpsDistanceKm.toFixed(1)} km driven by $${varianceAmount.toFixed(2)}.`;
+    }
+
+    return {
+      claimedFuelCost: claimedFuelCostUsd,
+      expectedFuelLitres: Math.round(expectedFuelLitres * 10) / 10,
+      expectedFuelCost,
+      varianceAmount,
+      isFlaggedForFraud,
+      auditReason
+    };
+  }
+}
