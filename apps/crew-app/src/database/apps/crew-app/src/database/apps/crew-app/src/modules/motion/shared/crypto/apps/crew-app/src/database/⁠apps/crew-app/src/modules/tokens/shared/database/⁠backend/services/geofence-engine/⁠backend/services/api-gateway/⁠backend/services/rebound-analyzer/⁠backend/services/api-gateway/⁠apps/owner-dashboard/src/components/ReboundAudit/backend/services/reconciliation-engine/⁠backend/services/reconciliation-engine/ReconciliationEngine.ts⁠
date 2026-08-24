@@ -1,0 +1,72 @@
+import { FuelCalculator, FuelAuditResult } from './FuelCalculator';
+
+export interface ShiftFinancialsInput {
+  shiftId: string;
+  totalGpsDistanceKm: number;
+  grossFaresCollected: number;
+  claimedFuelExpenses: number;
+  claimedRankFees: number;
+  claimedCrewAllowances: number;
+  tokensIssuedValue: number;    // Digital change issued (keeps cash in owner network)
+  tokensRedeemedValue: number;  // Digital change redeemed as fare payment
+  actualCashHandedOver: number;
+}
+
+export interface ShiftReconciliationSummary {
+  shiftId: string;
+  grossRevenue: number;
+  totalApprovedExpenses: number;
+  netTokenBalanceEffect: number;
+  expectedCashTarget: number;
+  actualCashHandedOver: number;
+  cashShortageOrSurplus: number; // Negative = Missing cash (Leakage)
+  fuelAudit: FuelAuditResult;
+  isShiftApproved: boolean;
+}
+
+export class ReconciliationEngine {
+  /**
+   * Executes complete mathematical end-of-day cash reconciliation
+   * Formula: Expected Cash = (Gross Fares) - (Valid Fuel) - (Rank Fees) - (Allowances) - (Tokens Issued) + (Tokens Redeemed)
+   */
+  public static processShiftReconciliation(input: ShiftFinancialsInput): ShiftReconciliationSummary {
+    // 1. Audit fuel consumption against GPS telemetry
+    const fuelAudit = FuelCalculator.calculateFuelVariance(
+      input.totalGpsDistanceKm,
+      input.claimedFuelExpenses
+    );
+
+    // 2. Use expected fuel cost if claimed amount is flagged as fraud
+    const approvedFuelExpense = fuelAudit.isFlaggedForFraud
+      ? fuelAudit.expectedFuelCost
+      : input.claimedFuelExpenses;
+
+    const totalApprovedExpenses = approvedFuelExpense + input.claimedRankFees + input.claimedCrewAllowances;
+
+    // 3. Net Token Effect: Tokens Issued leave cash in the conductor's pocket (deducted from cash target).
+    //    Tokens Redeemed pay for rides without new cash entering (added to cash target).
+    const netTokenBalanceEffect = input.tokensRedeemedValue - input.tokensIssuedValue;
+
+    // 4. Calculate final cash target
+    const expectedCashTarget = Math.round(
+      (input.grossFaresCollected - totalApprovedExpenses + netTokenBalanceEffect) * 100
+    ) / 100;
+
+    const cashShortageOrSurplus = Math.round((input.actualCashHandedOver - expectedCashTarget) * 100) / 100;
+
+    // Shift is approved if there is no cash shortage and no fuel fraud flags
+    const isShiftApproved = cashShortageOrSurplus >= 0 && !fuelAudit.isFlaggedForFraud;
+
+    return {
+      shiftId: input.shiftId,
+      grossRevenue: input.grossFaresCollected,
+      totalApprovedExpenses,
+      netTokenBalanceEffect,
+      expectedCashTarget,
+      actualCashHandedOver: input.actualCashHandedOver,
+      cashShortageOrSurplus,
+      fuelAudit,
+      isShiftApproved
+    };
+  }
+}
