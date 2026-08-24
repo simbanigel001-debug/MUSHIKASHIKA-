@@ -1,0 +1,37 @@
+import { TokenCrypto } from '../modules/motion/TokenCrypto';
+
+describe('TokenCrypto Security & Validation', () => {
+  const SECRET = 'test-hmac-secret-key-32-bytes-long!';
+  const mockPayload = {
+    shiftId: 'shift-123',
+    crewId: 'crew-456',
+    timestamp: Date.now(),
+    fareAmount: 1.50
+  };
+
+  it('should generate and verify a valid HMAC token', () => {
+    const token = TokenCrypto.generateToken(mockPayload, SECRET);
+    const isValid = TokenCrypto.verifyToken(token, SECRET);
+    expect(isValid).toBe(true);
+  });
+
+  it('should reject a token signed with a mismatched secret', () => {
+    const token = TokenCrypto.generateToken(mockPayload, SECRET);
+    const isValid = TokenCrypto.verifyToken(token, 'wrong-secret-key');
+    expect(isValid).toBe(false);
+  });
+
+  it('should reject tampered payload data', () => {
+    const token = TokenCrypto.generateToken(mockPayload, SECRET);
+    const tamperedToken = token.replace(mockPayload.shiftId, 'shift-999');
+    const isValid = TokenCrypto.verifyToken(tamperedToken, SECRET);
+    expect(isValid).toBe(false);
+  });
+
+  it('should invalidate expired tokens', () => {
+    const expiredPayload = { ...mockPayload, timestamp: Date.now() - 3600000 }; // 1 hour old
+    const token = TokenCrypto.generateToken(expiredPayload, SECRET, { ttlMs: 1800000 }); // 30 min TTL
+    const isValid = TokenCrypto.verifyToken(token, SECRET);
+    expect(isValid).toBe(false);
+  });
+});
