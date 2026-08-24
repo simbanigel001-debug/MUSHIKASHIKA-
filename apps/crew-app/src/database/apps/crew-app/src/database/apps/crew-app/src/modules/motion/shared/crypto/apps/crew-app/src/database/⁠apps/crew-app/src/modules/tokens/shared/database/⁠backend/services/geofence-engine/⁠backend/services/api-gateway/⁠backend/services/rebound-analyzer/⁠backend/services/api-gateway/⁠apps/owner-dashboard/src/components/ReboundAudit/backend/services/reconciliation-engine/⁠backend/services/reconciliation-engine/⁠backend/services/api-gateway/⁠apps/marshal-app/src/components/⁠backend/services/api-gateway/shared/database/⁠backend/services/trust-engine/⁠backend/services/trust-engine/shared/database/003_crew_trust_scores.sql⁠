@@ -1,0 +1,17 @@
+-- Crew Historical Trust Scores
+CREATE TABLE IF NOT EXISTS crew_trust_scores (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    crew_id UUID NOT NULL,
+    shift_id UUID NOT NULL,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('DRIVER', 'CONDUCTOR')),
+    composite_score NUMERIC(5,2) NOT NULL,
+    safety_subscore NUMERIC(5,2) NOT NULL,
+    financial_subscore NUMERIC(5,2) NOT NULL,
+    is_flagged BOOLEAN DEFAULT FALSE,
+    audit_details JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Index for generating driver/conductor lifetime performance averages
+CREATE INDEX IF NOT EXISTS idx_crew_trust_scores_crew_id ON crew_trust_scores(crew_id);
+CREATE INDEX IF NOT EXISTS idx_crew_trust_scores_flagged ON crew_trust_scores(is_flagged) WHERE is_flagged = TRUE;
