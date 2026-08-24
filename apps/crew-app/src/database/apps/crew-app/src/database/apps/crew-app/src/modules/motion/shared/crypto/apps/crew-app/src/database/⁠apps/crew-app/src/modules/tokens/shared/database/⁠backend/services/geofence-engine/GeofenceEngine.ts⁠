@@ -1,0 +1,63 @@
+import { Pool } from 'pg';
+
+export interface RankGeofenceMatch {
+  rankId: string;
+  rankName: string;
+  rankCode: string;
+}
+
+export class GeofenceEngine {
+  private dbPool: Pool;
+
+  constructor(dbPool: Pool) {
+    this.dbPool = dbPool;
+  }
+
+  /**
+   * Tests if a GPS coordinate falls inside any registered rank polygon (WGS84 / EPSG:4326)
+   */
+  public async checkPointInRank(latitude: number, longitude: number): Promise<RankGeofenceMatch | null> {
+    const query = `
+      SELECT id, name, code
+      FROM bus_ranks
+      WHERE ST_Contains(
+        boundary,
+        ST_SetSRID(ST_MakePoint($1, $2), 4326)
+      )
+      LIMIT 1;
+    `;
+
+    try {
+      const result = await this.dbPool.query(query, [longitude, latitude]);
+      if (result.rows.length > 0) {
+        return {
+          rankId: result.rows[0].id,
+          rankName: result.rows[0].name,
+          rankCode: result.rows[0].code,
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('Spatial PostGIS query error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Registers a new rank boundary polygon into PostGIS
+   */
+  public async registerRankPolygon(name: string, code: string, coordinates: Array<[number, number]>): Promise<string> {
+    // Construct WKT Polygon string (Longitude First for PostGIS)
+    const pointsString = coordinates.map(pt => `${pt[0]} ${pt[1]}`).join(', ');
+    const wktPolygon = `POLYGON((${pointsString}))`;
+
+    const query = `
+      INSERT INTO bus_ranks (name, code, boundary)
+      VALUES ($1, $2, ST_GeomFromText($3, 4326))
+      RETURNING id;
+    `;
+
+    const result = await this.dbPool.query(query, [name, code, wktPolygon]);
+    return result.rows[0].id;
+  }
+}
