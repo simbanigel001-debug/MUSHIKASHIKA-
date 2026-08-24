@@ -1,0 +1,80 @@
+export interface CrewShiftMetrics {
+  crewId: string;
+  role: 'DRIVER' | 'CONDUCTOR';
+  speedingViolationsCount: number;  // Occurrences exceeding 80 km/h threshold
+  harshBrakingCount: number;       // Sudden deceleration events
+  fuelVarianceUsd: number;         // Claimed vs expected fuel variance
+  cashDiscrepancyUsd: number;      // Actual vs expected cash-up difference (negative = shortage)
+}
+
+export interface CalculatedTrustScore {
+  crewId: string;
+  role: 'DRIVER' | 'CONDUCTOR';
+  compositeScore: number;          // 0.0 to 100.0
+  safetySubScore: number;         // Driver focus
+  financialSubScore: number;      // Conductor focus
+  flaggedForReview: boolean;
+  scoreDeductions: {
+    speeding: number;
+    harshBraking: number;
+    fuelVariance: number;
+    cashShortage: number;
+  };
+}
+
+export class TrustScoreEngine {
+  // Baseline weights depending on role
+  private static DRIVER_WEIGHTS = { safety: 0.70, financial: 0.30 };
+  private static CONDUCTOR_WEIGHTS = { safety: 0.20, financial: 0.80 };
+
+  /**
+   * Computes a normalized 0-100 score based on shift telemetry and cash-up
+   */
+  public static calculateShiftScore(metrics: CrewShiftMetrics): CalculatedTrustScore {
+    // 1. Calculate Safety Score (Base 100)
+    const speedingDeduction = metrics.speedingViolationsCount * 5.0; // -5 pts per speeding event
+    const brakingDeduction = metrics.harshBrakingCount * 2.5;       // -2.5 pts per harsh brake
+
+    const safetySubScore = Math.max(0, 100 - (speedingDeduction + brakingDeduction));
+
+    // 2. Calculate Financial Score (Base 100)
+    // -10 pts per $1.00 of unaccounted cash shortage
+    const cashDeduction = metrics.cashDiscrepancyUsd < 0 
+      ? Math.abs(metrics.cashDiscrepancyUsd) * 10.0 
+      : 0;
+
+    // -5 pts per $1.00 of unjustified fuel variance
+    const fuelDeduction = metrics.fuelVarianceUsd > 0 
+      ? metrics.fuelVarianceUsd * 5.0 
+      : 0;
+
+    const financialSubScore = Math.max(0, 100 - (cashDeduction + fuelDeduction));
+
+    // 3. Weight score according to role focus
+    const weights = metrics.role === 'DRIVER' 
+      ? TrustScoreEngine.DRIVER_WEIGHTS 
+      : TrustScoreEngine.CONDUCTOR_WEIGHTS;
+
+    const compositeScore = Math.round(
+      (safetySubScore * weights.safety + financialSubScore * weights.financial) * 10
+    ) / 10;
+
+    // Flag if score drops below critical threshold (e.g., 65.0)
+    const flaggedForReview = compositeScore < 65.0;
+
+    return {
+      crewId: metrics.crewId,
+      role: metrics.role,
+      compositeScore,
+      safetySubScore: Math.round(safetySubScore * 10) / 10,
+      financialSubScore: Math.round(financialSubScore * 10) / 10,
+      flaggedForReview,
+      scoreDeductions: {
+        speeding: speedingDeduction,
+        harshBraking: brakingDeduction,
+        fuelVariance: fuelDeduction,
+        cashShortage: cashDeduction,
+      },
+    };
+  }
+}
