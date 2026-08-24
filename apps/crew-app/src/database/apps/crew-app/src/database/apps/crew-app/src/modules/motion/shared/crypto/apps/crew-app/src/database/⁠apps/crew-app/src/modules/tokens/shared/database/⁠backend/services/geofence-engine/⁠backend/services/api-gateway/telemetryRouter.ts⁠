@@ -1,0 +1,74 @@
+import { Router, Request, Response } from 'express';
+import { Pool } from 'pg';
+
+export const createTelemetryRouter = (dbPool: Pool) => {
+  const router = Router();
+
+  router.post('/sync', async (req: Request, res: Response) => {
+    const { shiftId, vehicleId, stops, speedViolations } = req.body;
+
+    if (!shiftId || !vehicleId) {
+      return res.status(400).json({ error: 'Missing required shift or vehicle identification.' });
+    }
+
+    const client = await dbPool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // 1. Batch Insert Roadside Stops
+      if (stops && stops.length > 0) {
+        for (const stop of stops) {
+          const recordedAt = new Date(stop.timestamp).toISOString();
+          await client.query(
+            `INSERT INTO telemetry_stops 
+             (shift_id, vehicle_id, recorded_at, location, dwell_duration_seconds, max_speed_before_stop_kmh, is_mock_location)
+             VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326), $6, $7, $8)`,
+            [
+              shiftId,
+              vehicleId,
+              recordedAt,
+              stop.longitude,
+              stop.latitude,
+              stop.dwell_duration_seconds,
+              stop.max_speed_before_stop_kmh,
+              stop.is_mock_location === 1,
+            ]
+          );
+        }
+      }
+
+      // 2. Batch Insert Speed Violations
+      if (speedViolations && speedViolations.length > 0) {
+        for (const violation of speedViolations) {
+          const recordedAt = new Date(violation.timestamp).toISOString();
+          await client.query(
+            `INSERT INTO speed_violations 
+             (shift_id, vehicle_id, recorded_at, location, recorded_speed_kmh, speed_limit_kmh)
+             VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($4, $5), 4326), $6, $7)`,
+            [
+              shiftId,
+              vehicleId,
+              recordedAt,
+              violation.longitude,
+              violation.latitude,
+              violation.recorded_speed_kmh,
+              violation.speed_limit_kmh,
+            ]
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+      return res.status(200).json({ success: true, syncedStops: stops?.length || 0, syncedViolations: speedViolations?.length || 0 });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Failed to process batch telemetry sync:', error);
+      return res.status(500).json({ error: 'Internal database ingestion failure.' });
+    } finally {
+      client.release();
+    }
+  });
+
+  return router;
+};
