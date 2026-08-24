@@ -1,0 +1,39 @@
+import { ReconciliationEngine } from '../services/ReconciliationEngine';
+import { FuelCalculator } from '../services/FuelCalculator';
+
+describe('Reconciliation Engine Financial Audits', () => {
+  it('should correctly balance expected cash vs collected cash', () => {
+    const result = ReconciliationEngine.calculateVariance({
+      expectedCash: 120.00,
+      submittedCash: 115.00,
+      fuelSpent: 30.00
+    });
+
+    expect(result.variance).toBe(-5.00);
+    expect(result.status).toBe('FLAGGED_SHORTAGE');
+  });
+
+  it('should flag excessive fuel usage based on distance traveled', () => {
+    const fuelMetrics = FuelCalculator.estimateConsumption({
+      distanceKm: 100,
+      actualFuelSpentUSD: 45.00,
+      avgPricePerLiter: 1.50,
+      expectedKmPerLiter: 10 // Expected 10 liters = $15.00
+    });
+
+    expect(fuelMetrics.varianceUSD).toBe(30.00);
+    expect(fuelMetrics.isAnomalous).toBe(true);
+  });
+
+  it('should handle zero-distance shifts without division by zero errors', () => {
+    const fuelMetrics = FuelCalculator.estimateConsumption({
+      distanceKm: 0,
+      actualFuelSpentUSD: 0,
+      avgPricePerLiter: 1.50,
+      expectedKmPerLiter: 10
+    });
+
+    expect(fuelMetrics.varianceUSD).toBe(0);
+    expect(fuelMetrics.isAnomalous).toBe(false);
+  });
+});
