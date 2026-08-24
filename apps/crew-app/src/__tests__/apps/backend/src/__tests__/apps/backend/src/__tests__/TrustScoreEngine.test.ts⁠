@@ -1,0 +1,37 @@
+import { TrustScoreEngine } from '../services/TrustScoreEngine';
+
+describe('TrustScore Engine Evaluations', () => {
+  it('should deduct trust points for unexcused cash shortages', () => {
+    const initialScore = 100;
+    const updatedScore = TrustScoreEngine.evaluateShift({
+      currentScore: initialScore,
+      shortageUSD: 10.00,
+      speedingViolations: 0,
+      rankClearanceValid: true
+    });
+
+    expect(updatedScore).toBeLessThan(100);
+  });
+
+  it('should heavily penalize operating without rank clearance', () => {
+    const updatedScore = TrustScoreEngine.evaluateShift({
+      currentScore: 80,
+      shortageUSD: 0,
+      speedingViolations: 0,
+      rankClearanceValid: false
+    });
+
+    expect(updatedScore).toBeLessThanOrEqual(50);
+  });
+
+  it('should cap the maximum trust score at 100', () => {
+    const updatedScore = TrustScoreEngine.evaluateShift({
+      currentScore: 99,
+      shortageUSD: 0,
+      speedingViolations: 0,
+      rankClearanceValid: true
+    });
+
+    expect(updatedScore).toBe(100);
+  });
+});
