@@ -1,0 +1,33 @@
+import { Router, Request, Response } from 'express';
+import { Pool } from 'pg';
+import { ReboundAnalyzer } from '../rebound-analyzer/ReboundAnalyzer';
+
+export const createAuditRouter = (dbPool: Pool) => {
+  const router = Router();
+  const analyzer = new ReboundAnalyzer(dbPool);
+
+  // Endpoint called by the Next.js Owner Dashboard
+  router.get('/shift/:shiftId/discrepancies', async (req: Request, res: Response) => {
+    const { shiftId } = req.params;
+    
+    // In a real scenario, you'd fetch the segments and declared counts from the shift ledger DB
+    // For this example, we mock the conductor's declaration of a rebound trip from Chitungwiza to CBD
+    const mockTripSegmentId = 'TRP-RETURN-001';
+    const declaredPassengers = 3; 
+
+    try {
+      const auditFlag = await analyzer.analyzeReboundLeg(shiftId, mockTripSegmentId, declaredPassengers);
+      
+      return res.status(200).json({
+        shiftId,
+        hasFlags: !!auditFlag,
+        flag: auditFlag || null
+      });
+    } catch (error) {
+      console.error('Audit generation failed:', error);
+      return res.status(500).json({ error: 'Failed to generate shift audit' });
+    }
+  });
+
+  return router;
+};
