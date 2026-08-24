@@ -1,0 +1,86 @@
+import { Pool } from 'pg';
+import { TrustScoreEngine, CrewShiftMetrics } from './TrustScoreEngine';
+
+export const processCompletedShiftScores = async (dbPool: Pool, shiftId: string) => {
+  const client = await dbPool.connect();
+
+  try {
+    // Fetch aggregated shift data from telemetry & reconciliation logs
+    const query = `
+      SELECT 
+        s.id AS shift_id,
+        s.driver_id,
+        s.conductor_id,
+        COALESCE(t.speeding_count, 0) AS speeding_count,
+        COALESCE(t.harsh_brake_count, 0) AS harsh_brake_count,
+        COALESCE(r.shortage_surplus, 0) AS shortage_surplus,
+        COALESCE((r.audit_data->'fuelAudit'->>'varianceAmount')::numeric, 0) AS fuel_variance
+      FROM active_shifts s
+      LEFT JOIN (
+        SELECT shift_id, 
+               COUNT(*) FILTER (WHERE speed_kmh > 80) AS speeding_count,
+               COUNT(*) FILTER (WHERE acceleration_ms2 < -3.5) AS harsh_brake_count
+        FROM gps_telemetry_logs
+        WHERE shift_id = $1
+        GROUP BY shift_id
+      ) t ON s.id = t.shift_id
+      LEFT JOIN shift_reconciliations r ON s.id = r.shift_id
+      WHERE s.id = $1;
+    `;
+
+    const res = await client.query(query, [shiftId]);
+    if (res.rows.length === 0) return;
+
+    const data = res.rows[0];
+
+    // Compute Driver Score
+    const driverMetrics: CrewShiftMetrics = {
+      crewId: data.driver_id,
+      role: 'DRIVER',
+      speedingViolationsCount: parseInt(data.speeding_count, 10),
+      harshBrakingCount: parseInt(data.harsh_brake_count, 10),
+      fuelVarianceUsd: parseFloat(data.fuel_variance),
+      cashDiscrepancyUsd: parseFloat(data.shortage_surplus),
+    };
+    const driverScore = TrustScoreEngine.calculateShiftScore(driverMetrics);
+
+    // Compute Conductor Score
+    const conductorMetrics: CrewShiftMetrics = {
+      crewId: data.conductor_id,
+      role: 'CONDUCTOR',
+      speedingViolationsCount: parseInt(data.speeding_count, 10),
+      harshBrakingCount: parseInt(data.harsh_brake_count, 10),
+      fuelVarianceUsd: parseFloat(data.fuel_variance),
+      cashDiscrepancyUsd: parseFloat(data.shortage_surplus),
+    };
+    const conductorScore = TrustScoreEngine.calculateShiftScore(conductorMetrics);
+
+    // Persist Trust Scores
+    await client.query('BEGIN');
+
+    for (const score of [driverScore, conductorScore]) {
+      await client.query(
+        `INSERT INTO crew_trust_scores 
+         (crew_id, shift_id, role, composite_score, safety_subscore, financial_subscore, is_flagged, audit_details)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          score.crewId,
+          shiftId,
+          score.role,
+          score.compositeScore,
+          score.safetySubScore,
+          score.financialSubScore,
+          score.flaggedForReview,
+          JSON.stringify(score.scoreDeductions),
+        ]
+      );
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error(`Failed to execute trust score calculation for shift ${shiftId}:`, error);
+  } finally {
+    client.release();
+  }
+};
