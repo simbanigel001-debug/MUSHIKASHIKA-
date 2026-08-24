@@ -1,0 +1,97 @@
+import { Router, Request, Response } from 'express';
+import { Pool } from 'pg';
+import crypto from 'crypto';
+
+export const createMarshalRouter = (dbPool: Pool) => {
+  const router = Router();
+
+  // Secret used to decrypt/verify conductor QR token signatures
+  const HMAC_SECRET = process.env.QR_HMAC_SECRET || 'harare-kombi-secret-key';
+
+  router.post('/clearance', async (req: Request, res: Response) => {
+    const { qrPayload, marshalId, rankId, verifiedHeadcount, clearedAt } = req.body;
+
+    if (!qrPayload || !marshalId || !rankId || verifiedHeadcount == null) {
+      return res.status(400).json({ error: 'Missing required clearance parameters.' });
+    }
+
+    try {
+      // 1. Decode & Verify QR Token (Format: shiftId:vehicleReg:conductorDeclaredCount:timestamp:hmac)
+      const parts = qrPayload.split(':');
+      if (parts.length !== 5) {
+        return res.status(400).json({ error: 'Invalid QR token format.' });
+      }
+
+      const [shiftId, vehicleReg, conductorDeclaredCount, timestamp, tokenHmac] = parts;
+
+      // Verify HMAC signature to prevent forged conductor screens
+      const expectedHmac = crypto
+        .createHmac('sha256', HMAC_SECRET)
+        .update(`${shiftId}:${vehicleReg}:${conductorDeclaredCount}:${timestamp}`)
+        .digest('hex')
+        .substring(0, 8);
+
+      if (tokenHmac !== expectedHmac) {
+        return res.status(401).json({ error: 'Security validation failed: QR Code HMAC mismatch.' });
+      }
+
+      const declaredCountNum = parseInt(conductorDeclaredCount, 10);
+      const headcountDiscrepancy = verifiedHeadcount - declaredCountNum;
+
+      // 2. Insert Departure Clearance Log
+      const client = await dbPool.connect();
+      try {
+        await client.query('BEGIN');
+
+        await client.query(
+          `INSERT INTO rank_clearances 
+           (shift_id, marshal_id, rank_id, vehicle_reg, declared_headcount, verified_headcount, discrepancy, cleared_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            shiftId,
+            marshalId,
+            rankId,
+            vehicleReg,
+            declaredCountNum,
+            verifiedHeadcount,
+            headcountDiscrepancy,
+            clearedAt || new Date().toISOString(),
+          ]
+        );
+
+        // Update active shift state with verified starting headcount for the outbound route
+        await client.query(
+          `UPDATE active_shifts 
+           SET current_rank_id = $1, 
+               last_verified_headcount = $2, 
+               last_rank_departure_at = $3
+           WHERE shift_id = $4`,
+          [rankId, verifiedHeadcount, clearedAt || new Date().toISOString(), shiftId]
+        );
+
+        await client.query('COMMIT');
+      } catch (dbError) {
+        await client.query('ROLLBACK');
+        throw dbError;
+      } finally {
+        client.release();
+      }
+
+      return res.status(200).json({
+        success: true,
+        vehicleReg,
+        verifiedHeadcount,
+        discrepancy: headcountDiscrepancy,
+        message: headcountDiscrepancy !== 0
+          ? `Cleared with ${Math.abs(headcountDiscrepancy)} passenger discrepancy logged.`
+          : 'Cleared with perfect headcount match.',
+      });
+
+    } catch (error) {
+      console.error('Marshal departure clearance failed:', error);
+      return res.status(500).json({ error: 'Internal failure processing clearance.' });
+    }
+  });
+
+  return router;
+};
