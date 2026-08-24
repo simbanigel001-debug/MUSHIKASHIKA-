@@ -1,0 +1,13 @@
+# Kombi Fleet Management System - Launch Guide
+
+## Prerequisites
+- **Docker** (v20.10+) and **Docker Compose** (v2.0+) installed.
+- **Node.js** (v18+) for running local test scripts or development apps.
+
+---
+
+## 1. Environment Setup
+
+Clone the repository and copy the example environment file:
+```bash
+cp .env.example .env
