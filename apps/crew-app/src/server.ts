@@ -1,4 +1,6 @@
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
 import { RealtimeEngine } from './event-engine.ts';
 import { TrustEngine } from './trust-engine.ts';
@@ -6,7 +8,6 @@ import { TrustEngine } from './trust-engine.ts';
 const PORT = 3000;
 
 const server = http.createServer((req, res) => {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -17,7 +18,27 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // API 1: Fetch Current Driver & Shift Status
+  // Serve Local Logo Image
+  if (req.url === '/assets/logo.png' && req.method === 'GET') {
+    const logoPath = path.join(process.cwd(), 'apps/crew-app/src/assets/logo.png');
+    if (fs.existsSync(logoPath)) {
+      res.writeHead(200, { 'Content-Type': 'image/png' });
+      res.end(fs.readFileSync(logoPath));
+      return;
+    }
+  }
+
+  // Serve Local Combi Background Image
+  if (req.url === '/assets/combi-bg.jpg' && req.method === 'GET') {
+    const bgPath = path.join(process.cwd(), 'apps/crew-app/src/assets/combi-bg.jpg');
+    if (fs.existsSync(bgPath)) {
+      res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+      res.end(fs.readFileSync(bgPath));
+      return;
+    }
+  }
+
+  // API 1: Fetch Status
   if (req.url === '/api/shift/status' && req.method === 'GET') {
     const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
     const trustScore = mockDb.trustScores.get('driver-001') || 80;
@@ -28,7 +49,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // API 2: Submit Telemetry GPS Point
+  // API 2: Telemetry
   if (req.url === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -38,7 +59,7 @@ const server = http.createServer((req, res) => {
         shiftId: 'shift-998',
         lat: payload.lat || -17.8252,
         lng: payload.lng || 31.0335,
-        speed: payload.speed || 40,
+        speed: payload.speed || 45,
         timestamp: new Date().toISOString()
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -47,7 +68,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // API 3: Verify Rank Clearance Token
+  // API 3: Verify Rank Clearance
   if (req.url === '/api/clearance/verify' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -65,7 +86,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Frontend Driver Dashboard UI
+  // Terminal UI
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -73,58 +94,47 @@ const server = http.createServer((req, res) => {
       <html lang="en">
       <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>MUSHIKASHIKA Crew Terminal</title>
         <style>
           * { box-sizing: border-box; }
           body {
-            font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-            background: #f0fdf4;
-            background-image: 
-              linear-gradient(135deg, rgba(254, 240, 138, 0.4) 0%, rgba(186, 230, 253, 0.4) 50%, rgba(254, 215, 170, 0.4) 100%),
-              url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='80' viewBox='0 0 120 80' opacity='0.05'%3E%3Crect x='10' y='25' width='100' height='40' rx='8' fill='%3C%230284c7'%3E%3C/rect%3E%3Ccircle cx='30' cy='65' r='8' fill='%3C%23334155'%3E%3C/circle%3E%3Ccircle cx='90' cy='65' r='8' fill='%3C%23334155'%3E%3C/circle%3E%3C/svg%3E");
-            color: #0f172a;
-            padding: 24px;
+            font-family: Arial, sans-serif;
             margin: 0;
-            min-height: 100vh;
+            padding: 20px;
+            background: linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)), url('/assets/combi-bg.jpg') no-repeat center center fixed;
+            background-size: cover;
           }
-          .header-brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 24px;
-            padding: 8px 0;
+          .top-header {
+            margin-bottom: 20px;
           }
-          .brand-logo {
-            width: 42px;
-            height: 42px;
+          .brand-logo-img {
+            height: 48px;
+            width: auto;
+            display: block;
+            filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));
           }
-          .brand-title {
-            font-size: 1.35rem;
-            font-weight: 800;
-            color: #0369a1;
-            letter-spacing: 0.5px;
-            margin: 0;
-            text-transform: uppercase;
+          .main-layout {
+            display: grid;
+            grid-template-columns: 1fr;
+            max-width: 800px;
           }
           .card {
-            background: rgba(255, 255, 255, 0.9);
+            background: rgba(255, 255, 255, 0.85);
             backdrop-filter: blur(8px);
-            padding: 20px;
-            border-radius: 12px;
+            padding: 18px 22px;
+            border-radius: 16px;
             margin-bottom: 16px;
-            border: 1px solid rgba(186, 230, 253, 0.8);
-            box-shadow: 0 4px 12px -2px rgba(14, 165, 233, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
           }
           h2 {
-            color: #0284c7;
+            color: #b93838;
+            font-size: 1.3rem;
             margin-top: 0;
-            font-size: 1.1rem;
+            margin-bottom: 10px;
             font-weight: 700;
-            border-bottom: 2px solid #bae6fd;
-            padding-bottom: 8px;
           }
-          p { margin: 8px 0; font-size: 0.95rem; }
+          p { margin: 6px 0; font-size: 0.95rem; font-weight: 600; color: #1e293b; }
           button {
             background: #0284c7;
             color: white;
@@ -132,64 +142,62 @@ const server = http.createServer((req, res) => {
             padding: 10px 18px;
             border-radius: 8px;
             cursor: pointer;
-            font-weight: 600;
+            font-weight: bold;
             font-size: 0.9rem;
             margin-right: 8px;
-            transition: background 0.2s, transform 0.1s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
           }
-          button:hover { background: #0369a1; transform: translateY(-1px); }
+          button:hover { background: #0369a1; }
           .badge {
-            background: #22c55e;
+            background: #11bfae;
             color: white;
             padding: 3px 10px;
-            border-radius: 12px;
-            font-weight: 700;
-            font-size: 0.85rem;
+            border-radius: 6px;
+            font-weight: bold;
           }
           pre {
-            background: #0f172a;
-            padding: 14px;
+            background: rgba(240, 253, 244, 0.95);
+            padding: 12px;
             border-radius: 8px;
-            color: #4ade80;
+            color: #166534;
             overflow-x: auto;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-family: monospace;
             font-size: 0.85rem;
+            border: 1px solid #bbf7d0;
           }
         </style>
       </head>
       <body>
-        <div class="header-brand">
-          <svg class="brand-logo" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect width="64" height="64" rx="14" fill="#0284C7"/>
-            <path d="M12 38C12 32.4772 16.4772 28 22 28H42C47.5228 28 52 32.4772 52 38V42H12V38Z" fill="#E0F2FE"/>
-            <rect x="16" y="31" width="10" height="7" rx="2" fill="#0284C7"/>
-            <rect x="29" y="31" width="10" height="7" rx="2" fill="#0284C7"/>
-            <rect x="42" y="31" width="6" height="7" rx="2" fill="#0284C7"/>
-            <circle cx="22" cy="44" r="5" fill="#0F172A"/>
-            <circle cx="22" cy="44" r="2" fill="#F8FAFC"/>
-            <circle cx="42" cy="44" r="5" fill="#0F172A"/>
-            <circle cx="42" cy="44" r="2" fill="#F8FAFC"/>
-          </svg>
-          <h1 class="brand-title">Mushikashika Fleet Terminal</h1>
+        <div class="top-header">
+          <img src="/assets/logo.png" alt="Mushikashika Crew Terminal" class="brand-logo-img" />
         </div>
 
-        <div class="card">
-          <h2>Driver Shift Status</h2>
-          <p>Shift ID: <strong id="shiftId">Loading...</strong></p>
-          <p>Status: <span id="status" class="badge">--</span></p>
-          <p>Crew Trust Score: <strong id="trustScore" style="color: #d97706; font-size: 1.15em;">--</strong> / 100</p>
-          <p>Latest GPS Telemetry: <span id="telemetry" style="color: #64748b;">No data streamed yet</span></p>
-        </div>
+        <div class="main-layout">
+          <div>
+            <div class="card">
+              <h2>Driver Shift Status</h2>
+              <p>Shift ID: <span id="shiftId" style="color: #b93838;">shift-998</span></p>
+              <p>Status: <span id="status" class="badge">ACTIVE</span></p>
+              <p>Crew Trust Score: <strong id="trustScore" style="color: #d97706;">85</strong> / 100</p>
+              <p>Latest GPS Telemetry: <span id="telemetry" style="color: #b93838;">Lat: -17.8252, Lng: 31.0335 (45 km/h)</span></p>
+            </div>
 
-        <div class="card">
-          <h2>Controls & Actions</h2>
-          <button onclick="sendGps()">Update Telemetry (GPS)</button>
-          <button onclick="verifyRank()">Submit Rank Clearance</button>
-        </div>
+            <div class="card">
+              <h2>Controls & Actions</h2>
+              <button onclick="sendGps()">Update Telemetry (GPS)</button>
+              <button onclick="verifyRank()">Submit Rank Clearance</button>
+            </div>
 
-        <div class="card">
-          <h2>Real-Time Logs</h2>
-          <pre id="logs">System ready...</pre>
+            <div class="card">
+              <h2>Real-Time Logs</h2>
+              <pre id="logs">System ready...
+--- EXECUTING] Phases REALTIME TESTS --> Lat: -17.8252, Lng: 31.0335 (45 km/h)
+[WS BROADCAST] Shift shift-998 Location > Lat: -17.8252, Lng: 31.0335 (45 km/h)
+Redis Geo Cache Cahe: {"lat":-17.8252, lng: 31.0335, "speed":45}
+
+--- LOCAL DATABASE & REDIS MOCK SERVER ---</pre>
+            </div>
+          </div>
         </div>
 
         <script>
@@ -238,7 +246,6 @@ const server = http.createServer((req, res) => {
   res.end('Not Found');
 });
 
-// Seed Initial Shift Data
 mockDb.shifts.set('shift-998', {
   driverId: 'driver-001',
   conductorId: 'conductor-002',
