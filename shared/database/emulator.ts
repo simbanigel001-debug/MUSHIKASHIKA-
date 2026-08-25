@@ -3,7 +3,6 @@ import path from 'node:path';
 
 console.log('--- 🚀 LOCAL DATABASE & REDIS MOCK SERVER ---');
 
-// Verify schema files exist
 const schemaDir = path.join(process.cwd(), 'shared', 'database');
 const files = ['001_initial_schema.sql', '002_rank_clearances.sql', '003_crew_trust_scores.sql'];
 
@@ -16,7 +15,6 @@ files.forEach(file => {
   }
 });
 
-// Mock Database Connection Pools
 export const mockDb = {
   shifts: new Map(),
   rankClearances: new Map(),
@@ -29,4 +27,4 @@ export const mockRedis = {
   get: (key: string) => mockRedis.cache.get(key),
 };
 
-console.log('\nPostgreSQL (Port 5432) & Redis (Port 6379) successfully emulated in-memory!');
+console.log('PostgreSQL & Redis in-memory mock initialized.\n');
