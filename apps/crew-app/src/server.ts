@@ -1,4 +1,71 @@
-// Frontend Driver Dashboard UI
+import http from 'node:http';
+import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
+import { RealtimeEngine } from './event-engine.ts';
+import { TrustEngine } from './trust-engine.ts';
+
+const PORT = 3000;
+
+const server = http.createServer((req, res) => {
+  // Enable CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // API 1: Fetch Current Driver & Shift Status
+  if (req.url === '/api/shift/status' && req.method === 'GET') {
+    const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
+    const trustScore = mockDb.trustScores.get('driver-001') || 80;
+    const geo = mockRedis.get('location:shift-998');
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null }));
+    return;
+  }
+
+  // API 2: Submit Telemetry GPS Point
+  if (req.url === '/api/telemetry' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      const payload = JSON.parse(body || '{}');
+      RealtimeEngine.publishLocation({
+        shiftId: 'shift-998',
+        lat: payload.lat || -17.8252,
+        lng: payload.lng || 31.0335,
+        speed: payload.speed || 40,
+        timestamp: new Date().toISOString()
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'TELEMETRY_UPDATED' }));
+    });
+    return;
+  }
+
+  // API 3: Verify Rank Clearance Token
+  if (req.url === '/api/clearance/verify' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      const data = JSON.parse(body || '{}');
+      const result = TrustEngine.processClearance({
+        shiftId: 'shift-998',
+        marshalId: data.marshalId || 'marshal-CBD-01',
+        signature: 'sig_valid_sha256_mock_hash',
+        timestamp: new Date().toISOString()
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    });
+    return;
+  }
+
+  // Frontend Driver Dashboard UI
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -166,3 +233,22 @@
     `);
     return;
   }
+
+  res.writeHead(404);
+  res.end('Not Found');
+});
+
+// Seed Initial Shift Data
+mockDb.shifts.set('shift-998', {
+  driverId: 'driver-001',
+  conductorId: 'conductor-002',
+  status: 'ACTIVE',
+  startTime: new Date().toISOString()
+});
+mockDb.trustScores.set('driver-001', 85);
+
+server.listen(PORT, () => {
+  console.log(`\n==================================================`);
+  console.log(` 🚀 MUSHIKASHIKA SERVER LIVE AT: http://localhost:${PORT}`);
+  console.log(`==================================================\n`);
+});
