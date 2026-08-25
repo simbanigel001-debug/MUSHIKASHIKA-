@@ -1,4 +1,4 @@
-import { mockDb, mockRedis } from '../../../shared/database/emulator.js';
+import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
 
 console.log('--- STARTING COMBINED FLEET SERVICE ---');
 
