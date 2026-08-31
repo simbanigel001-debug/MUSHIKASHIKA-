@@ -3,6 +3,7 @@ import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
 import { TrustEngine } from './trust-engine.ts';
 import { QueueEngine } from './queue-engine.ts';
 import { FinanceEngine } from './finance-engine.ts';
+import { ShiftEngine } from './shift-engine.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -37,7 +38,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2. Fetch Complete Shift, Queue, & Financial Status
+  // 2. Fetch Shift & Financial Status
   if (req.url === '/api/shift/status' && req.method === 'GET') {
     const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
     const trustScore = mockDb.trustScores.get('driver-001') || 80;
@@ -50,7 +51,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. Telemetry Stream Ingress
+  // 3. Telemetry Ingress
   if (req.url === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -101,7 +102,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 5. Queue Management Route (Join Rank)
+  // 5. Join Rank Queue
   if (req.url === '/api/rank/join' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -120,7 +121,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 6. Passenger Count Verification, Rank Departure & Auto-Financial Settlement
+  // 6. Passenger Count & Rank Departure
   if (req.url === '/api/rank/depart' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -130,11 +131,7 @@ const server = http.createServer((req, res) => {
         const shiftId = data.shiftId || 'shift-998';
         const count = data.count || 16;
         
-        const result = QueueEngine.verifyPassengerCount(
-          data.rankId || 'CBD-MAIN-RANK',
-          shiftId,
-          count
-        );
+        const result = QueueEngine.verifyPassengerCount(data.rankId || 'CBD-MAIN-RANK', shiftId, count);
 
         if (result.success) {
           const settlement = FinanceEngine.processDepartureSettlement(shiftId, count);
@@ -143,6 +140,28 @@ const server = http.createServer((req, res) => {
 
         res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'INVALID_PAYLOAD' }));
+      }
+    });
+    return;
+  }
+
+  // 7. Close Shift & Generate EOD Audit Summary
+  if (req.url === '/api/shift/close' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        const shiftId = data.shiftId || 'shift-998';
+        const summary = ShiftEngine.closeShift(shiftId);
+
+        broadcastEvent('SHIFT_CLOSED', summary);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, summary }));
       } catch {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'INVALID_PAYLOAD' }));
@@ -163,10 +182,12 @@ const server = http.createServer((req, res) => {
         <style>
           body { font-family: system-ui, sans-serif; margin: 24px; background: #f1f5f9; color: #0f172a; }
           h1 { color: #0284c7; margin-bottom: 20px; }
-          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }
+          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 20px; }
           .card { background: white; padding: 18px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
           h2 { margin-top: 0; font-size: 1.1rem; color: #334155; }
           button { background: #0284c7; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-right: 6px; margin-bottom: 6px; }
+          button.danger { background: #ef4444; }
+          button.danger:hover { background: #dc2626; }
           button:hover { background: #0369a1; }
           pre { background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 6px; font-size: 0.85rem; height: 180px; overflow-y: auto; }
         </style>
@@ -177,6 +198,7 @@ const server = http.createServer((req, res) => {
           <div class="card">
             <h2>Driver Shift Status</h2>
             <p>Shift: <strong id="shiftId">Loading...</strong></p>
+            <p>Status: <strong id="shiftState">ACTIVE</strong></p>
             <p>Trust Score: <strong id="trustScore">Loading...</strong> / 100</p>
             <p>GPS: <span id="telemetry">None</span></p>
           </div>
@@ -196,7 +218,8 @@ const server = http.createServer((req, res) => {
             <button onclick="sendGps()">Send GPS</button>
             <button onclick="joinQueue()">Join Rank Queue</button>
             <button onclick="verifyRank()">Marshal Clearance</button>
-            <button onclick="departRank()">Verify Passenger & Depart</button>
+            <button onclick="departRank()">Verify & Depart</button>
+            <button class="danger" onclick="closeShift()">End Shift & Reconcile</button>
           </div>
         </div>
 
@@ -210,6 +233,7 @@ const server = http.createServer((req, res) => {
             const res = await fetch('/api/shift/status');
             const data = await res.json();
             document.getElementById('shiftId').innerText = data.shift.status !== 'NO_ACTIVE_SHIFT' ? 'shift-998' : 'None';
+            document.getElementById('shiftState').innerText = data.shift.status || 'OFFLINE';
             document.getElementById('trustScore').innerText = data.trustScore;
             if (data.latestGeo) {
               document.getElementById('telemetry').innerText = data.latestGeo.lat + ', ' + data.latestGeo.lng + ' (' + data.latestGeo.speed + ' km/h)';
@@ -261,6 +285,14 @@ const server = http.createServer((req, res) => {
             });
           }
 
+          async function closeShift() {
+            await fetch('/api/shift/close', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ shiftId: 'shift-998' })
+            });
+          }
+
           function log(msg) {
             const el = document.getElementById('logs');
             el.innerText = '[' + new Date().toLocaleTimeString() + '] ' + msg + '\\n' + el.innerText;
@@ -281,7 +313,10 @@ const server = http.createServer((req, res) => {
               log('[QUEUE] Vehicle joined rank line.');
             } else if (data.type === 'DEPARTURE_UPDATE') {
               fetchStatus();
-              log('[FINANCE SETTLEMENT] Trip settled. Gross: $' + data.payload.settlement.grossFare + ' | Owner Payout: $' + data.payload.settlement.netOwnerPayout);
+              log('[FINANCE] Trip settled. Gross: $' + data.payload.settlement.grossFare);
+            } else if (data.type === 'SHIFT_CLOSED') {
+              fetchStatus();
+              log('[EOD AUDIT] Shift closed! Total Gross: $' + data.payload.financials.totalGross + ' | Trips Completed: ' + data.payload.financials.tripsCompleted);
             }
           };
 
