@@ -1,6 +1,8 @@
-import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
+// event-engine.ts
+import { ServerResponse } from 'node:http';
+import { mockRedis } from '../../../shared/database/emulator.ts';
 
-export interface LocationPayload {
+export interface TelemetryPoint {
   shiftId: string;
   lat: number;
   lng: number;
@@ -9,28 +11,45 @@ export interface LocationPayload {
 }
 
 export class RealtimeEngine {
-  // Simulate active WebSocket connection pool
-  private static connections = new Set<string>();
+  private static clients: Set<ServerResponse> = new Set();
 
-  static connect(clientId: string) {
-    this.connections.add(clientId);
-    console.log(`[WS CONNECTED] Client: ${clientId}`);
+  /**
+   * Register an incoming SSE HTTP connection
+   */
+  static addClient(res: ServerResponse) {
+    this.clients.add(res);
   }
 
-  static publishLocation(payload: LocationPayload) {
-    // 1. Check if shift exists in DB
-    const shift = mockDb.shifts.get(payload.shiftId);
-    if (!shift) {
-      console.log(`[WS ERROR] Shift ${payload.shiftId} not found!`);
-      return false;
+  /**
+   * Remove a disconnected client
+   */
+  static removeClient(res: ServerResponse) {
+    this.clients.delete(res);
+  }
+
+  /**
+   * Publish location updates to Redis cache and broadcast to all active SSE clients
+   */
+  static publishLocation(point: TelemetryPoint) {
+    // 1. Update in-memory Redis Geo cache
+    mockRedis.set(`location:${point.shiftId}`, JSON.stringify(point));
+
+    // 2. Broadcast event to connected clients
+    const eventData = `data: ${JSON.stringify({ type: 'TELEMETRY_UPDATE', payload: point })}\n\n`;
+    
+    for (const client of this.clients) {
+      client.write(eventData);
     }
+  }
 
-    // 2. Cache current location state in Redis (latest point)
-    const geoKey = `location:${payload.shiftId}`;
-    mockRedis.set(geoKey, JSON.stringify({ lat: payload.lat, lng: payload.lng, speed: payload.speed }));
-
-    // 3. Broadcast to all active listener connections
-    console.log(`[WS BROADCAST] Shift ${payload.shiftId} Location -> Lat: ${payload.lat}, Lng: ${payload.lng} (${payload.speed} km/h)`);
-    return true;
+  /**
+   * Broadcast rank clearance and trust updates
+   */
+  static broadcastClearance(clearanceData: object) {
+    const eventData = `data: ${JSON.stringify({ type: 'CLEARANCE_UPDATE', payload: clearanceData })}\n\n`;
+    
+    for (const client of this.clients) {
+      client.write(eventData);
+    }
   }
 }
