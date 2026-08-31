@@ -1,3 +1,4 @@
+// apps/crew-app/src/server.ts
 import http, { ServerResponse } from 'node:http';
 import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
 import { TrustEngine } from './trust-engine.ts';
@@ -5,6 +6,7 @@ import { QueueEngine } from './queue-engine.ts';
 import { FinanceEngine } from './finance-engine.ts';
 import { ShiftEngine } from './shift-engine.ts';
 import { AuthEngine } from './auth-engine.ts';
+import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -27,7 +29,20 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Auth Helper Endpoint: Get Quick Driver & Marshal Tokens
+  // 1. Role Views
+  if (req.url === '/marshal') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(MARSHAL_VIEW);
+    return;
+  }
+
+  if (req.url === '/owner') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(OWNER_VIEW);
+    return;
+  }
+
+  // 2. Auth Helper Endpoint: Get Quick Demo Tokens
   if (req.url === '/api/auth/demo-tokens' && req.method === 'GET') {
     const driverToken = AuthEngine.generateToken({ userId: 'driver-001', role: 'DRIVER', shiftId: 'shift-998' });
     const marshalToken = AuthEngine.generateToken({ userId: 'marshal-CBD-01', role: 'MARSHAL' });
@@ -38,7 +53,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // SSE Stream
+  // 3. SSE Stream
   if (req.url === '/api/events' && req.method === 'GET') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -50,7 +65,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Fetch Shift Status
+  // 4. Fetch Shift Status
   if (req.url === '/api/shift/status' && req.method === 'GET') {
     const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
     const trustScore = mockDb.trustScores.get('driver-001') || 80;
@@ -63,7 +78,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Telemetry Ingress
+  // 5. Telemetry Ingress
   if (req.url === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -89,7 +104,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Protected: Marshal Clearance Verification (Requires Auth Header)
+  // 6. Protected: Marshal Clearance Verification
   if (req.url === '/api/clearance/verify' && req.method === 'POST') {
     const token = AuthEngine.extractTokenFromHeader(req.headers.authorization);
     const auth = token ? AuthEngine.verifyToken(token) : null;
@@ -123,7 +138,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Join Rank Queue
+  // 7. Join Rank Queue
   if (req.url === '/api/rank/join' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -142,7 +157,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Depart Rank & Settle
+  // 8. Depart Rank & Settle
   if (req.url === '/api/rank/depart' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -169,7 +184,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Close Shift
+  // 9. Close Shift
   if (req.url === '/api/shift/close' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -191,7 +206,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Web Terminal
+  // 10. Default Debug Web Terminal
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -339,7 +354,7 @@ const server = http.createServer((req, res) => {
               log('[TELEMETRY] Broadcast received.');
             } else if (data.type === 'CLEARANCE_UPDATE') {
               fetchStatus();
-              log('[CLEARANCE] HMAC & JWT Authenticated successfully.');
+              log('[CLEARANCE] HMAC Signature verified.');
             } else if (data.type === 'QUEUE_UPDATE') {
               fetchStatus();
               log('[QUEUE] Vehicle joined rank line.');
@@ -365,6 +380,7 @@ const server = http.createServer((req, res) => {
   res.end('Not Found');
 });
 
+// Seed Initial Shift State
 mockDb.shifts.set('shift-998', {
   driverId: 'driver-001',
   conductorId: 'conductor-002',
@@ -375,6 +391,6 @@ mockDb.trustScores.set('driver-001', 85);
 
 server.listen(PORT, () => {
   console.log(`\n==================================================`);
-  console.log(` 🚀 AUTH-SECURED SERVER LIVE AT: http://localhost:${PORT}`);
+  console.log(` 🚀 SERVER LIVE AT: http://localhost:${PORT}`);
   console.log(`==================================================\n`);
 });
