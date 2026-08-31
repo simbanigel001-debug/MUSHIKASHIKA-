@@ -1,39 +1,30 @@
-import { mockDb } from '../../../shared/database/emulator.ts';
+// Inside server.ts -> API 3: Verify Rank Clearance
+if (req.url === '/api/clearance/verify' && req.method === 'POST') {
+  let body = '';
+  req.on('data', chunk => { body += chunk; });
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body || '{}');
+      const shiftId = data.shiftId || 'shift-998';
+      const marshalId = data.marshalId || 'marshal-CBD-01';
+      const timestamp = data.timestamp || new Date().toISOString();
 
-export interface ClearanceToken {
-  shiftId: string;
-  marshalId: string;
-  signature: string;
-  timestamp: string;
-}
+      // Accept signature from payload (Marshal App), or generate fallback for dev testing
+      const signature = data.signature || TrustEngine.generateSignature({ shiftId, marshalId, timestamp });
 
-export class TrustEngine {
-  // Validate rank clearance token and update trust rating
-  static processClearance(token: ClearanceToken): { success: boolean; newScore: number } {
-    const shift = mockDb.shifts.get(token.shiftId);
-    if (!shift) {
-      console.log(`[TRUST ERROR] Invalid Shift ID: ${token.shiftId}`);
-      return { success: false, newScore: 0 };
+      const result = TrustEngine.processClearance({
+        shiftId,
+        marshalId,
+        timestamp,
+        signature
+      });
+
+      res.writeHead(result.success ? 200 : 401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, reason: 'MALFORMED_PAYLOAD' }));
     }
-
-    // Save clearance record
-    const clearanceId = `clr-${Date.now()}`;
-    mockDb.rankClearances.set(clearanceId, {
-      shiftId: token.shiftId,
-      marshalId: token.marshalId,
-      signature: token.signature,
-      clearedAt: token.timestamp
-    });
-
-    // Calculate score bump (+5 per verified rank clearance up to 100)
-    const currentScore = mockDb.trustScores.get(shift.driverId) || 80;
-    const updatedScore = Math.min(100, currentScore + 5);
-    
-    mockDb.trustScores.set(shift.driverId, updatedScore);
-
-    console.log(`[CLEARANCE VERIFIED] Marshal ${token.marshalId} cleared Shift ${token.shiftId}`);
-    console.log(`[TRUST SCORE] Crew ${shift.driverId} updated to ${updatedScore}/100`);
-
-    return { success: true, newScore: updatedScore };
-  }
+  });
+  return;
 }
