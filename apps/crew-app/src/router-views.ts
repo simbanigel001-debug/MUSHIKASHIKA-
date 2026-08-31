@@ -53,13 +53,22 @@ export const MARSHAL_VIEW = `
     async function authorizeDeparture() {
       const shiftId = document.getElementById('targetShift').value;
       const count = Number(document.getElementById('passCount').value);
+      
+      // Auto-join queue first to guarantee shift exists in line
+      await fetch('/api/rank/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rankId: 'CBD-MAIN-RANK', shiftId })
+      });
+
       const res = await fetch('/api/rank/depart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rankId: 'CBD-MAIN-RANK', shiftId, count })
       });
       const data = await res.json();
-      document.getElementById('log').innerText = '[DEPARTURE] Total Gross $' + data.entry?.passengerCount * 1.50;
+      const gross = data.settlement ? data.settlement.grossFare : (count * 1.50);
+      document.getElementById('log').innerText = '[DEPARTURE SUCCESS] Passengers: ' + count + ' | Total Gross: $' + gross.toFixed(2);
     }
 
     init();
@@ -109,7 +118,11 @@ export const OWNER_VIEW = `
         document.getElementById('driverCut').innerText = '$' + data.financials.totalDriverCommission.toFixed(2);
       }
     }
-    setInterval(loadStats, 2000);
+
+    // Connect to live Server-Sent Events stream for instant updates
+    const eventSource = new EventSource('/api/events');
+    eventSource.onmessage = () => loadStats();
+
     loadStats();
   </script>
 </body>
