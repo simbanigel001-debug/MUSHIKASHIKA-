@@ -16,6 +16,19 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // SSE Real-Time Event Stream
+  if (req.url === '/api/events' && req.method === 'GET') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+
+    RealtimeEngine.addClient(res);
+    req.on('close', () => RealtimeEngine.removeClient(res));
+    return;
+  }
+
   // API 1: Fetch Status
   if (req.url === '/api/shift/status' && req.method === 'GET') {
     const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
@@ -32,16 +45,22 @@ const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
-      const payload = JSON.parse(body || '{}');
-      RealtimeEngine.publishLocation({
-        shiftId: 'shift-998',
-        lat: payload.lat || -17.8252,
-        lng: payload.lng || 31.0335,
-        speed: payload.speed || 45,
-        timestamp: new Date().toISOString()
-      });
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'TELEMETRY_UPDATED' }));
+      try {
+        const payload = JSON.parse(body || '{}');
+        const point = {
+          shiftId: payload.shiftId || 'shift-998',
+          lat: payload.lat || -17.8252,
+          lng: payload.lng || 31.0335,
+          speed: payload.speed || 45,
+          timestamp: new Date().toISOString()
+        };
+        RealtimeEngine.publishLocation(point);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'TELEMETRY_UPDATED', point }));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'INVALID_JSON' }));
+      }
     });
     return;
   }
@@ -57,15 +76,12 @@ const server = http.createServer((req, res) => {
         const marshalId = data.marshalId || 'marshal-CBD-01';
         const timestamp = data.timestamp || new Date().toISOString();
 
-        // Accept signature from payload (Marshal App), or generate fallback for dev testing
+        // Fallback auto-sign for UI dev triggers, or pass raw signature from external apps
         const signature = data.signature || TrustEngine.generateSignature({ shiftId, marshalId, timestamp });
 
-        const result = TrustEngine.processClearance({
-          shiftId,
-          marshalId,
-          timestamp,
-          signature
-        });
+        const result = TrustEngine.processClearance({ shiftId, marshalId, timestamp, signature });
+
+        RealtimeEngine.broadcastClearance(result);
 
         res.writeHead(result.success ? 200 : 401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
@@ -77,7 +93,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Terminal UI
+  // Main Terminal UI Dashboard
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -85,39 +101,14 @@ const server = http.createServer((req, res) => {
       <html lang="en">
       <head>
         <meta charset="UTF-8">
-        <title>MUSHIKASHIKA Crew Terminal</title>
+        <title>MUSHIKASHIKA Fleet Terminal</title>
         <style>
-          body {
-            font-family: sans-serif;
-            margin: 20px;
-            background: #f4f4f9;
-            color: #333;
-          }
+          body { font-family: sans-serif; margin: 20px; background: #f4f4f9; color: #333; }
           h1 { color: #005b96; }
-          .card {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-          }
-          button {
-            background: #005b96;
-            color: white;
-            border: none;
-            padding: 10px 15px;
-            border-radius: 5px;
-            cursor: pointer;
-            margin-right: 5px;
-          }
+          .card { background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+          button { background: #005b96; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; margin-right: 5px; }
           button:hover { background: #003366; }
-          pre {
-            background: #222;
-            color: #0ef;
-            padding: 10px;
-            border-radius: 5px;
-            overflow-x: auto;
-          }
+          pre { background: #222; color: #0ef; padding: 10px; border-radius: 5px; overflow-x: auto; }
         </style>
       </head>
       <body>
@@ -138,8 +129,8 @@ const server = http.createServer((req, res) => {
         </div>
 
         <div class="card">
-          <h2>Real-Time Logs</h2>
-          <pre id="logs">System ready...</pre>
+          <h2>Real-Time Event Logs</h2>
+          <pre id="logs">Connecting to SSE Event Engine...</pre>
         </div>
 
         <script>
@@ -155,30 +146,41 @@ const server = http.createServer((req, res) => {
           }
 
           async function sendGps() {
-            const res = await fetch('/api/telemetry', {
+            await fetch('/api/telemetry', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ lat: -17.8252, lng: 31.0335, speed: Math.floor(Math.random() * 30) + 30 })
             });
-            const data = await res.json();
-            log('Telemetry Broadcast Sent -> Status: ' + data.status);
-            fetchStatus();
           }
 
           async function verifyRank() {
-            const res = await fetch('/api/clearance/verify', {
+            await fetch('/api/clearance/verify', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ marshalId: 'marshal-RANK-04' })
             });
-            const data = await res.json();
-            log('Rank Clearance Processed! Updated Trust Score = ' + data.newScore);
-            fetchStatus();
           }
 
           function log(msg) {
             document.getElementById('logs').innerText = '[' + new Date().toLocaleTimeString() + '] ' + msg + '\\n' + document.getElementById('logs').innerText;
           }
+
+          // SSE Stream Connection
+          const eventSource = new EventSource('/api/events');
+          eventSource.onopen = () => log('[SSE] Connected to real-time event pipeline.');
+          
+          eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'TELEMETRY_UPDATE') {
+              const geo = data.payload;
+              document.getElementById('telemetry').innerText = 'Lat: ' + geo.lat + ', Lng: ' + geo.lng + ' (' + geo.speed + ' km/h)';
+              log('[SSE BROADCAST] Telemetry: ' + geo.lat + ', ' + geo.lng + ' @ ' + geo.speed + 'km/h');
+            }
+            if (data.type === 'CLEARANCE_UPDATE') {
+              fetchStatus();
+              log('[SSE BROADCAST] Rank Clearance Verified! Updated Trust Score');
+            }
+          };
 
           fetchStatus();
         </script>
@@ -192,6 +194,7 @@ const server = http.createServer((req, res) => {
   res.end('Not Found');
 });
 
+// Seed mock database
 mockDb.shifts.set('shift-998', {
   driverId: 'driver-001',
   conductorId: 'conductor-002',
