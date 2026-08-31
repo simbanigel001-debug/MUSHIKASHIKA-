@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { mockDb } from '../../../shared/database/emulator.ts';
 
 const MARSHAL_SECRET_KEY = process.env.MARSHAL_SECRET || 'super_secret_rank_marshal_key';
-const MAX_TIMESTAMP_DRIFT_MS = 60 * 1000; // 60 seconds max drift
+const MAX_TIMESTAMP_DRIFT_MS = 60 * 1000; // 60s window
 
 export interface ClearancePayload {
   shiftId: string;
@@ -12,24 +12,16 @@ export interface ClearancePayload {
 }
 
 export class TrustEngine {
-  /**
-   * Generates a valid HMAC signature for payloads
-   */
   static generateSignature(payload: { shiftId: string; marshalId: string; timestamp: string }): string {
     const message = `${payload.shiftId}:${payload.marshalId}:${payload.timestamp}`;
     return crypto.createHmac('sha256', MARSHAL_SECRET_KEY).update(message).digest('hex');
   }
 
-  /**
-   * Cryptographically verifies clearance payload and adjusts trust scores
-   */
   static processClearance(payload: ClearancePayload) {
     const { shiftId, marshalId, timestamp, signature } = payload;
-
-    // 1. Check timestamp drift
     const payloadTime = new Date(timestamp).getTime();
     const currentTime = Date.now();
-    
+
     if (isNaN(payloadTime) || Math.abs(currentTime - payloadTime) > MAX_TIMESTAMP_DRIFT_MS) {
       return {
         success: false,
@@ -38,9 +30,7 @@ export class TrustEngine {
       };
     }
 
-    // 2. Validate HMAC signature
     const expectedSignature = this.generateSignature({ shiftId, marshalId, timestamp });
-    
     if (!signature || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
       return {
         success: false,
@@ -49,9 +39,7 @@ export class TrustEngine {
       };
     }
 
-    // 3. Score update on success
     const updatedScore = this.adjustTrustScore(shiftId, +5);
-
     return {
       success: true,
       reason: 'RANK_CLEARANCE_VERIFIED',
@@ -64,10 +52,8 @@ export class TrustEngine {
   private static adjustTrustScore(shiftId: string, delta: number): number {
     const shift = mockDb.shifts.get(shiftId);
     const driverId = shift ? shift.driverId : 'driver-001';
-    
     const currentScore = mockDb.trustScores.get(driverId) || 80;
     const newScore = Math.min(100, Math.max(0, currentScore + delta));
-    
     mockDb.trustScores.set(driverId, newScore);
     return newScore;
   }
