@@ -1,6 +1,4 @@
 import http from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
 import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
 import { RealtimeEngine } from './event-engine.ts';
 import { TrustEngine } from './trust-engine.ts';
@@ -16,26 +14,6 @@ const server = http.createServer((req, res) => {
     res.writeHead(204);
     res.end();
     return;
-  }
-
-  // Serve Local Logo Image
-  if (req.url === '/assets/logo.png' && req.method === 'GET') {
-    const logoPath = path.join(process.cwd(), 'apps/crew-app/src/assets/logo.png');
-    if (fs.existsSync(logoPath)) {
-      res.writeHead(200, { 'Content-Type': 'image/png' });
-      res.end(fs.readFileSync(logoPath));
-      return;
-    }
-  }
-
-  // Serve Local Combi Background Image
-  if (req.url === '/assets/combi-bg.jpg' && req.method === 'GET') {
-    const bgPath = path.join(process.cwd(), 'apps/crew-app/src/assets/combi-bg.jpg');
-    if (fs.existsSync(bgPath)) {
-      res.writeHead(200, { 'Content-Type': 'image/jpeg' });
-      res.end(fs.readFileSync(bgPath));
-      return;
-    }
   }
 
   // API 1: Fetch Status
@@ -96,108 +74,59 @@ const server = http.createServer((req, res) => {
         <meta charset="UTF-8">
         <title>MUSHIKASHIKA Crew Terminal</title>
         <style>
-          * { box-sizing: border-box; }
           body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: linear-gradient(rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.4)), url('/assets/combi-bg.jpg') no-repeat center center fixed;
-            background-size: cover;
+            font-family: sans-serif;
+            margin: 20px;
+            background: #f4f4f9;
+            color: #333;
           }
-          .top-header {
-            margin-bottom: 20px;
-          }
-          .brand-logo-img {
-            height: 48px;
-            width: auto;
-            display: block;
-            filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));
-          }
-          .main-layout {
-            display: grid;
-            grid-template-columns: 1fr;
-            max-width: 800px;
-          }
+          h1 { color: #005b96; }
           .card {
-            background: rgba(255, 255, 255, 0.85);
-            backdrop-filter: blur(8px);
-            padding: 18px 22px;
-            border-radius: 16px;
-            margin-bottom: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.9);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
           }
-          h2 {
-            color: #b93838;
-            font-size: 1.3rem;
-            margin-top: 0;
-            margin-bottom: 10px;
-            font-weight: 700;
-          }
-          p { margin: 6px 0; font-size: 0.95rem; font-weight: 600; color: #1e293b; }
           button {
-            background: #0284c7;
+            background: #005b96;
             color: white;
             border: none;
-            padding: 10px 18px;
-            border-radius: 8px;
+            padding: 10px 15px;
+            border-radius: 5px;
             cursor: pointer;
-            font-weight: bold;
-            font-size: 0.9rem;
-            margin-right: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-right: 5px;
           }
-          button:hover { background: #0369a1; }
-          .badge {
-            background: #11bfae;
-            color: white;
-            padding: 3px 10px;
-            border-radius: 6px;
-            font-weight: bold;
-          }
+          button:hover { background: #003366; }
           pre {
-            background: rgba(240, 253, 244, 0.95);
-            padding: 12px;
-            border-radius: 8px;
-            color: #166534;
+            background: #222;
+            color: #0ef;
+            padding: 10px;
+            border-radius: 5px;
             overflow-x: auto;
-            font-family: monospace;
-            font-size: 0.85rem;
-            border: 1px solid #bbf7d0;
           }
         </style>
       </head>
       <body>
-        <div class="top-header">
-          <img src="/assets/logo.png" alt="Mushikashika Crew Terminal" class="brand-logo-img" />
+        <h1>MUSHIKASHIKA FLEET TERMINAL</h1>
+
+        <div class="card">
+          <h2>Driver Shift Status</h2>
+          <p>Shift ID: <strong id="shiftId">Loading...</strong></p>
+          <p>Status: <strong id="status">Loading...</strong></p>
+          <p>Crew Trust Score: <strong id="trustScore">Loading...</strong> / 100</p>
+          <p>Latest GPS Telemetry: <span id="telemetry">None</span></p>
         </div>
 
-        <div class="main-layout">
-          <div>
-            <div class="card">
-              <h2>Driver Shift Status</h2>
-              <p>Shift ID: <span id="shiftId" style="color: #b93838;">shift-998</span></p>
-              <p>Status: <span id="status" class="badge">ACTIVE</span></p>
-              <p>Crew Trust Score: <strong id="trustScore" style="color: #d97706;">85</strong> / 100</p>
-              <p>Latest GPS Telemetry: <span id="telemetry" style="color: #b93838;">Lat: -17.8252, Lng: 31.0335 (45 km/h)</span></p>
-            </div>
+        <div class="card">
+          <h2>Controls & Actions</h2>
+          <button onclick="sendGps()">Update Telemetry (GPS)</button>
+          <button onclick="verifyRank()">Submit Rank Clearance</button>
+        </div>
 
-            <div class="card">
-              <h2>Controls & Actions</h2>
-              <button onclick="sendGps()">Update Telemetry (GPS)</button>
-              <button onclick="verifyRank()">Submit Rank Clearance</button>
-            </div>
-
-            <div class="card">
-              <h2>Real-Time Logs</h2>
-              <pre id="logs">System ready...
---- EXECUTING] Phases REALTIME TESTS --> Lat: -17.8252, Lng: 31.0335 (45 km/h)
-[WS BROADCAST] Shift shift-998 Location > Lat: -17.8252, Lng: 31.0335 (45 km/h)
-Redis Geo Cache Cahe: {"lat":-17.8252, lng: 31.0335, "speed":45}
-
---- LOCAL DATABASE & REDIS MOCK SERVER ---</pre>
-            </div>
-          </div>
+        <div class="card">
+          <h2>Real-Time Logs</h2>
+          <pre id="logs">System ready...</pre>
         </div>
 
         <script>
@@ -211,6 +140,7 @@ Redis Geo Cache Cahe: {"lat":-17.8252, lng: 31.0335, "speed":45}
               document.getElementById('telemetry').innerText = 'Lat: ' + data.latestGeo.lat + ', Lng: ' + data.latestGeo.lng + ' (' + data.latestGeo.speed + ' km/h)';
             }
           }
+
           async function sendGps() {
             const res = await fetch('/api/telemetry', {
               method: 'POST',
@@ -221,6 +151,7 @@ Redis Geo Cache Cahe: {"lat":-17.8252, lng: 31.0335, "speed":45}
             log('Telemetry Broadcast Sent -> Status: ' + data.status);
             fetchStatus();
           }
+
           async function verifyRank() {
             const res = await fetch('/api/clearance/verify', {
               method: 'POST',
@@ -231,9 +162,11 @@ Redis Geo Cache Cahe: {"lat":-17.8252, lng: 31.0335, "speed":45}
             log('Rank Clearance Processed! Updated Trust Score = ' + data.newScore);
             fetchStatus();
           }
+
           function log(msg) {
             document.getElementById('logs').innerText = '[' + new Date().toLocaleTimeString() + '] ' + msg + '\\n' + document.getElementById('logs').innerText;
           }
+
           fetchStatus();
         </script>
       </body>
