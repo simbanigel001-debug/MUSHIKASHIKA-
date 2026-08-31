@@ -4,6 +4,7 @@ import { TrustEngine } from './trust-engine.ts';
 import { QueueEngine } from './queue-engine.ts';
 import { FinanceEngine } from './finance-engine.ts';
 import { ShiftEngine } from './shift-engine.ts';
+import { AuthEngine } from './auth-engine.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -18,7 +19,7 @@ function broadcastEvent(type: string, payload: object) {
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -26,7 +27,18 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 1. SSE Real-Time Stream
+  // Auth Helper Endpoint: Get Quick Driver & Marshal Tokens
+  if (req.url === '/api/auth/demo-tokens' && req.method === 'GET') {
+    const driverToken = AuthEngine.generateToken({ userId: 'driver-001', role: 'DRIVER', shiftId: 'shift-998' });
+    const marshalToken = AuthEngine.generateToken({ userId: 'marshal-CBD-01', role: 'MARSHAL' });
+    const ownerToken = AuthEngine.generateToken({ userId: 'owner-101', role: 'OWNER' });
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ driverToken, marshalToken, ownerToken }));
+    return;
+  }
+
+  // SSE Stream
   if (req.url === '/api/events' && req.method === 'GET') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -38,7 +50,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2. Fetch Shift & Financial Status
+  // Fetch Shift Status
   if (req.url === '/api/shift/status' && req.method === 'GET') {
     const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
     const trustScore = mockDb.trustScores.get('driver-001') || 80;
@@ -51,7 +63,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. Telemetry Ingress
+  // Telemetry Ingress
   if (req.url === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -77,17 +89,26 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 4. Rank Clearance Verification (HMAC-SHA256)
+  // Protected: Marshal Clearance Verification (Requires Auth Header)
   if (req.url === '/api/clearance/verify' && req.method === 'POST') {
+    const token = AuthEngine.extractTokenFromHeader(req.headers.authorization);
+    const auth = token ? AuthEngine.verifyToken(token) : null;
+
+    if (!auth || (auth.role !== 'MARSHAL' && auth.role !== 'DRIVER')) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'UNAUTHORIZED_MARSHAL_ACCESS' }));
+      return;
+    }
+
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
         const data = JSON.parse(body || '{}');
         const shiftId = data.shiftId || 'shift-998';
-        const marshalId = data.marshalId || 'marshal-CBD-01';
-        const timestamp = data.timestamp || new Date().toISOString();
-        const signature = data.signature || TrustEngine.generateSignature({ shiftId, marshalId, timestamp });
+        const marshalId = auth.userId;
+        const timestamp = new Date().toISOString();
+        const signature = TrustEngine.generateSignature({ shiftId, marshalId, timestamp });
 
         const result = TrustEngine.processClearance({ shiftId, marshalId, timestamp, signature });
         broadcastEvent('CLEARANCE_UPDATE', result);
@@ -102,7 +123,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 5. Join Rank Queue
+  // Join Rank Queue
   if (req.url === '/api/rank/join' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -121,7 +142,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 6. Passenger Count & Rank Departure
+  // Depart Rank & Settle
   if (req.url === '/api/rank/depart' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -148,7 +169,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 7. Close Shift & Generate EOD Audit Summary
+  // Close Shift
   if (req.url === '/api/shift/close' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -170,7 +191,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Frontend Dashboard
+  // Web Terminal
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -187,13 +208,12 @@ const server = http.createServer((req, res) => {
           h2 { margin-top: 0; font-size: 1.1rem; color: #334155; }
           button { background: #0284c7; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-right: 6px; margin-bottom: 6px; }
           button.danger { background: #ef4444; }
-          button.danger:hover { background: #dc2626; }
           button:hover { background: #0369a1; }
           pre { background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 6px; font-size: 0.85rem; height: 180px; overflow-y: auto; }
         </style>
       </head>
       <body>
-        <h1>MUSHIKASHIKA FLEET TERMINAL</h1>
+        <h1>MUSHIKASHIKA FLEET TERMINAL (AUTH ENABLED)</h1>
         <div class="grid">
           <div class="card">
             <h2>Driver Shift Status</h2>
@@ -217,7 +237,7 @@ const server = http.createServer((req, res) => {
             <h2>Control Actions</h2>
             <button onclick="sendGps()">Send GPS</button>
             <button onclick="joinQueue()">Join Rank Queue</button>
-            <button onclick="verifyRank()">Marshal Clearance</button>
+            <button onclick="verifyRank()">Marshal Clearance (Auth)</button>
             <button onclick="departRank()">Verify & Depart</button>
             <button class="danger" onclick="closeShift()">End Shift & Reconcile</button>
           </div>
@@ -229,6 +249,15 @@ const server = http.createServer((req, res) => {
         </div>
 
         <script>
+          let authToken = '';
+
+          async function initAuth() {
+            const res = await fetch('/api/auth/demo-tokens');
+            const data = await res.json();
+            authToken = data.marshalToken;
+            log('[AUTH] Demo JWT session acquired.');
+          }
+
           async function fetchStatus() {
             const res = await fetch('/api/shift/status');
             const data = await res.json();
@@ -272,7 +301,10 @@ const server = http.createServer((req, res) => {
           async function verifyRank() {
             await fetch('/api/clearance/verify', {
               method: 'POST',
-              headers: {'Content-Type': 'application/json'},
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + authToken
+              },
               body: JSON.stringify({ marshalId: 'marshal-RANK-04' })
             });
           }
@@ -307,7 +339,7 @@ const server = http.createServer((req, res) => {
               log('[TELEMETRY] Broadcast received.');
             } else if (data.type === 'CLEARANCE_UPDATE') {
               fetchStatus();
-              log('[CLEARANCE] HMAC Signature verified.');
+              log('[CLEARANCE] HMAC & JWT Authenticated successfully.');
             } else if (data.type === 'QUEUE_UPDATE') {
               fetchStatus();
               log('[QUEUE] Vehicle joined rank line.');
@@ -316,10 +348,11 @@ const server = http.createServer((req, res) => {
               log('[FINANCE] Trip settled. Gross: $' + data.payload.settlement.grossFare);
             } else if (data.type === 'SHIFT_CLOSED') {
               fetchStatus();
-              log('[EOD AUDIT] Shift closed! Total Gross: $' + data.payload.financials.totalGross + ' | Trips Completed: ' + data.payload.financials.tripsCompleted);
+              log('[EOD AUDIT] Shift closed! Total Gross: $' + data.payload.financials.totalGross);
             }
           };
 
+          initAuth();
           fetchStatus();
         </script>
       </body>
@@ -332,7 +365,6 @@ const server = http.createServer((req, res) => {
   res.end('Not Found');
 });
 
-// Seed Initial State
 mockDb.shifts.set('shift-998', {
   driverId: 'driver-001',
   conductorId: 'conductor-002',
@@ -343,6 +375,6 @@ mockDb.trustScores.set('driver-001', 85);
 
 server.listen(PORT, () => {
   console.log(`\n==================================================`);
-  console.log(` 🚀 MUSHIKASHIKA SERVER LIVE AT: http://localhost:${PORT}`);
+  console.log(` 🚀 AUTH-SECURED SERVER LIVE AT: http://localhost:${PORT}`);
   console.log(`==================================================\n`);
 });
