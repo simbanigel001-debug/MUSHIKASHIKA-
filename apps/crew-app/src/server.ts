@@ -2,6 +2,7 @@ import http, { ServerResponse } from 'node:http';
 import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
 import { TrustEngine } from './trust-engine.ts';
 import { QueueEngine } from './queue-engine.ts';
+import { FinanceEngine } from './finance-engine.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -36,15 +37,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2. Fetch Shift & Queue Status
+  // 2. Fetch Complete Shift, Queue, & Financial Status
   if (req.url === '/api/shift/status' && req.method === 'GET') {
     const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
     const trustScore = mockDb.trustScores.get('driver-001') || 80;
     const geo = mockRedis.get('location:shift-998');
     const rankQueue = QueueEngine.getQueueStatus('CBD-MAIN-RANK');
+    const financials = FinanceEngine.getShiftFinancials('shift-998');
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null, rankQueue }));
+    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null, rankQueue, financials }));
     return;
   }
 
@@ -118,21 +120,27 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 6. Passenger Count Verification & Rank Departure
+  // 6. Passenger Count Verification, Rank Departure & Auto-Financial Settlement
   if (req.url === '/api/rank/depart' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
         const data = JSON.parse(body || '{}');
+        const shiftId = data.shiftId || 'shift-998';
+        const count = data.count || 16;
+        
         const result = QueueEngine.verifyPassengerCount(
           data.rankId || 'CBD-MAIN-RANK',
-          data.shiftId || 'shift-998',
-          data.count || 15
+          shiftId,
+          count
         );
+
         if (result.success) {
-          broadcastEvent('DEPARTURE_UPDATE', result.entry);
+          const settlement = FinanceEngine.processDepartureSettlement(shiftId, count);
+          broadcastEvent('DEPARTURE_UPDATE', { entry: result.entry, settlement });
         }
+
         res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       } catch {
@@ -143,7 +151,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Frontend Single Page Dashboard
+  // Frontend Dashboard
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -155,7 +163,7 @@ const server = http.createServer((req, res) => {
         <style>
           body { font-family: system-ui, sans-serif; margin: 24px; background: #f1f5f9; color: #0f172a; }
           h1 { color: #0284c7; margin-bottom: 20px; }
-          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 20px; }
+          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }
           .card { background: white; padding: 18px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
           h2 { margin-top: 0; font-size: 1.1rem; color: #334155; }
           button { background: #0284c7; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-right: 6px; margin-bottom: 6px; }
@@ -176,6 +184,12 @@ const server = http.createServer((req, res) => {
             <h2>Rank Queue Status</h2>
             <p>Rank Position: <strong id="queuePos">Not in Queue</strong></p>
             <p>Queue Status: <span id="queueStatus">Idle</span></p>
+          </div>
+          <div class="card">
+            <h2>Financial Settlement Ledger</h2>
+            <p>Gross Fare Earned: <strong id="grossFare">$0.00</strong></p>
+            <p>Owner Net Payout: <strong id="ownerPayout">$0.00</strong></p>
+            <p>Driver Commission: <span id="driverCut">$0.00</span></p>
           </div>
           <div class="card">
             <h2>Control Actions</h2>
@@ -207,6 +221,11 @@ const server = http.createServer((req, res) => {
             } else {
               document.getElementById('queuePos').innerText = 'Not in Queue';
               document.getElementById('queueStatus').innerText = 'Idle';
+            }
+            if (data.financials) {
+              document.getElementById('grossFare').innerText = '$' + data.financials.totalGross.toFixed(2);
+              document.getElementById('ownerPayout').innerText = '$' + data.financials.totalOwnerPayout.toFixed(2);
+              document.getElementById('driverCut').innerText = '$' + data.financials.totalDriverCommission.toFixed(2);
             }
           }
 
@@ -262,7 +281,7 @@ const server = http.createServer((req, res) => {
               log('[QUEUE] Vehicle joined rank line.');
             } else if (data.type === 'DEPARTURE_UPDATE') {
               fetchStatus();
-              log('[DEPARTURE] Passenger count verified (' + data.payload.passengerCount + '). Vehicle departed.');
+              log('[FINANCE SETTLEMENT] Trip settled. Gross: $' + data.payload.settlement.grossFare + ' | Owner Payout: $' + data.payload.settlement.netOwnerPayout);
             }
           };
 
