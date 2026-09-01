@@ -44,17 +44,18 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 9.5 CSV Export Endpoint for Owners
-if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
-  const csvData = ExportEngine.generateOwnerCsv('shift-998');
-  res.writeHead(200, {
-    'Content-Type': 'text/csv',
-    'Content-Disposition': 'attachment; filename="owner-shift-report.csv"'
-  });
-  res.end(csvData);
-  return;
-}
-  // 2. Auth Helper Endpoint: Get Quick Demo Tokens
+  // 2. CSV Export Endpoint for Fleet Owners
+  if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
+    const csvData = ExportEngine.generateOwnerCsv('shift-998');
+    res.writeHead(200, {
+      'Content-Type': 'text/csv',
+      'Content-Disposition': 'attachment; filename="owner-shift-report.csv"'
+    });
+    res.end(csvData);
+    return;
+  }
+
+  // 3. Auth Helper Endpoint: Quick Demo Tokens
   if (req.url === '/api/auth/demo-tokens' && req.method === 'GET') {
     const driverToken = AuthEngine.generateToken({ userId: 'driver-001', role: 'DRIVER', shiftId: 'shift-998' });
     const marshalToken = AuthEngine.generateToken({ userId: 'marshal-CBD-01', role: 'MARSHAL' });
@@ -65,7 +66,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
     return;
   }
 
-  // 3. SSE Stream Endpoint
+  // 4. SSE Stream Endpoint
   if (req.url === '/api/events' && req.method === 'GET') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -77,7 +78,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
     return;
   }
 
-  // 4. Fetch Shift Status
+  // 5. Fetch Shift Status
   if (req.url === '/api/shift/status' && req.method === 'GET') {
     const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
     const trustScore = mockDb.trustScores.get('driver-001') || 80;
@@ -90,7 +91,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
     return;
   }
 
-  // 5. Telemetry Ingress Endpoint
+  // 6. Telemetry Ingress Endpoint
   if (req.url === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -116,7 +117,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
     return;
   }
 
-  // 6. Protected: Marshal Clearance Verification Endpoint
+  // 7. Protected: Marshal Clearance Verification Endpoint
   if (req.url === '/api/clearance/verify' && req.method === 'POST') {
     const token = AuthEngine.extractTokenFromHeader(req.headers.authorization);
     const auth = token ? AuthEngine.verifyToken(token) : null;
@@ -150,7 +151,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
     return;
   }
 
-  // 7. Join Rank Queue Endpoint
+  // 8. Join Rank Queue Endpoint
   if (req.url === '/api/rank/join' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -169,7 +170,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
     return;
   }
 
-  // 8. Depart Rank & Financial Settlement Endpoint
+  // 9. Depart Rank & Financial Settlement Endpoint
   if (req.url === '/api/rank/depart' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -196,7 +197,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
     return;
   }
 
-  // 9. Close Shift Endpoint
+  // 10. Close Shift Endpoint
   if (req.url === '/api/shift/close' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -218,7 +219,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
     return;
   }
 
-  // 10. Default Terminal Dashboard (Home)
+  // 11. Default Web Terminal Dashboard (with Leaflet Map)
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -227,6 +228,8 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
       <head>
         <meta charset="UTF-8">
         <title>MUSHIKASHIKA Fleet Terminal</title>
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <style>
           body { font-family: system-ui, sans-serif; margin: 24px; background: #f1f5f9; color: #0f172a; }
           h1 { color: #0284c7; margin-bottom: 20px; }
@@ -236,11 +239,15 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
           button { background: #0284c7; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-right: 6px; margin-bottom: 6px; }
           button.danger { background: #ef4444; }
           button:hover { background: #0369a1; }
-          pre { background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 6px; font-size: 0.85rem; height: 180px; overflow-y: auto; }
+          #map { height: 320px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+          pre { background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 6px; font-size: 0.85rem; height: 160px; overflow-y: auto; }
         </style>
       </head>
       <body>
-        <h1>MUSHIKASHIKA FLEET TERMINAL (BULAWAYO LIVE TELEMETRY)</h1>
+        <h1>MUSHIKASHIKA FLEET TERMINAL (BULAWAYO LIVE MAP)</h1>
+        
+        <div id="map"></div>
+
         <div class="grid">
           <div class="card">
             <h2>Driver Shift Status</h2>
@@ -277,6 +284,19 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
 
         <script>
           let authToken = '';
+          let map, vehicleMarker;
+
+          function initMap() {
+            map = L.map('map').setView([-20.1500, 28.5830], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              maxZoom: 19,
+              attribution: '© OpenStreetMap'
+            }).addTo(map);
+
+            vehicleMarker = L.marker([-20.1585, 28.6028]).addTo(map)
+              .bindPopup('<b>Mushikashika #998</b><br>Ascot Corridor')
+              .openPopup();
+          }
 
           async function initAuth() {
             const res = await fetch('/api/auth/demo-tokens');
@@ -292,7 +312,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
             document.getElementById('shiftState').innerText = data.shift.status || 'OFFLINE';
             document.getElementById('trustScore').innerText = data.trustScore;
             if (data.latestGeo) {
-              document.getElementById('telemetry').innerText = data.latestGeo.lat + ', ' + data.latestGeo.lng + ' (' + data.latestGeo.speed + ' km/h)';
+              updateTelemetryUI(data.latestGeo);
             }
             const activeEntry = data.rankQueue.find(q => q.shiftId === 'shift-998');
             if (activeEntry) {
@@ -306,6 +326,16 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
               document.getElementById('grossFare').innerText = '$' + data.financials.totalGross.toFixed(2);
               document.getElementById('ownerPayout').innerText = '$' + data.financials.totalOwnerPayout.toFixed(2);
               document.getElementById('driverCut').innerText = '$' + data.financials.totalDriverCommission.toFixed(2);
+            }
+          }
+
+          function updateTelemetryUI(point) {
+            const text = point.lat + ', ' + point.lng + ' (' + point.speed + ' km/h)';
+            document.getElementById('telemetry').innerText = text;
+            if (vehicleMarker && map) {
+              const newLatLng = new L.LatLng(point.lat, point.lng);
+              vehicleMarker.setLatLng(newLatLng);
+              map.panTo(newLatLng);
             }
           }
 
@@ -362,8 +392,8 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
           eventSource.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.type === 'TELEMETRY_UPDATE') {
-              document.getElementById('telemetry').innerText = data.payload.lat + ', ' + data.payload.lng + ' (' + data.payload.speed + ' km/h)';
-              log('[TELEMETRY] Ascot -> CBD -> Luveve GPS point streamed.');
+              updateTelemetryUI(data.payload);
+              log('[MAP UPDATE] Vehicle moving: ' + data.payload.lat + ', ' + data.payload.lng);
             } else if (data.type === 'CLEARANCE_UPDATE') {
               fetchStatus();
               log('[CLEARANCE] HMAC Signature verified.');
@@ -379,6 +409,7 @@ if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
             }
           };
 
+          initMap();
           initAuth();
           fetchStatus();
         </script>
