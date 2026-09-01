@@ -9,7 +9,7 @@ import { AuthEngine } from './auth-engine.ts';
 import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.ts';
 import { TelemetryEmulator } from './telemetry-emulator.ts';
 import { ExportEngine } from './export-engine.ts';
-import { OfflineEngine, OfflineQueueItem } from './offline-engine.ts';
+import { OfflineEngine, type OfflineQueueItem } from './offline-engine.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
