@@ -107,6 +107,9 @@ export const OWNER_VIEW = `
       <div class="val" id="driverCut">$0.00</div>
     </div>
   </div>
+  <button onclick="window.location.href='/api/owner/export-csv'" style="margin-top: 16px; background: #059669; color: white; border: none; padding: 10px 16px; border-radius: 6px; font-weight: bold; cursor: pointer;">
+  📥 Download Financial Ledger (CSV)
+</button>
 
   <script>
     async function loadStats() {
