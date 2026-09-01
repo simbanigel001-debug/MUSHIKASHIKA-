@@ -9,6 +9,7 @@ import { AuthEngine } from './auth-engine.ts';
 import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.ts';
 import { TelemetryEmulator } from './telemetry-emulator.ts';
 import { ExportEngine } from './export-engine.ts';
+import { OfflineEngine, OfflineQueueItem } from './offline-engine.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -52,6 +53,32 @@ const server = http.createServer((req, res) => {
       'Content-Disposition': 'attachment; filename="owner-shift-report.csv"'
     });
     res.end(csvData);
+    return;
+  }
+
+  // 2.5 Offline Queue Sync Endpoint
+  if (req.url === '/api/offline/sync' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        const items: OfflineQueueItem[] = data.items || [];
+        
+        items.forEach(item => {
+          OfflineEngine.enqueue(item.type, item.payload);
+        });
+
+        const syncedCount = OfflineEngine.clearQueue();
+        broadcastEvent('OFFLINE_SYNC_COMPLETE', { syncedCount });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, syncedCount }));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'INVALID_OFFLINE_PAYLOAD' }));
+      }
+    });
     return;
   }
 
@@ -406,6 +433,8 @@ const server = http.createServer((req, res) => {
             } else if (data.type === 'SHIFT_CLOSED') {
               fetchStatus();
               log('[EOD AUDIT] Shift closed! Total Gross: $' + data.payload.financials.totalGross);
+            } else if (data.type === 'OFFLINE_SYNC_COMPLETE') {
+              log('[PWA OFFLINE] Synced ' + data.payload.syncedCount + ' offline queue items to server.');
             }
           };
 
