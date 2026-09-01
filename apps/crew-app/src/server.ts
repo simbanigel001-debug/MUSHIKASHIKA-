@@ -8,6 +8,7 @@ import { ShiftEngine } from './shift-engine.ts';
 import { AuthEngine } from './auth-engine.ts';
 import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.ts';
 import { TelemetryEmulator } from './telemetry-emulator.ts';
+import { ExportEngine } from './export-engine.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -43,6 +44,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 9.5 CSV Export Endpoint for Owners
+if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
+  const csvData = ExportEngine.generateOwnerCsv('shift-998');
+  res.writeHead(200, {
+    'Content-Type': 'text/csv',
+    'Content-Disposition': 'attachment; filename="owner-shift-report.csv"'
+  });
+  res.end(csvData);
+  return;
+}
   // 2. Auth Helper Endpoint: Get Quick Demo Tokens
   if (req.url === '/api/auth/demo-tokens' && req.method === 'GET') {
     const driverToken = AuthEngine.generateToken({ userId: 'driver-001', role: 'DRIVER', shiftId: 'shift-998' });
