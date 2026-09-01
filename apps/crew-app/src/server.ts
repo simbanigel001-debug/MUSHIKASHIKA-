@@ -7,6 +7,7 @@ import { FinanceEngine } from './finance-engine.ts';
 import { ShiftEngine } from './shift-engine.ts';
 import { AuthEngine } from './auth-engine.ts';
 import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.ts';
+import { TelemetryEmulator } from './telemetry-emulator.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -29,7 +30,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 1. Role Views
+  // 1. Dedicated Role Views
   if (req.url === '/marshal') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(MARSHAL_VIEW);
@@ -53,7 +54,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. SSE Stream
+  // 3. SSE Stream Endpoint
   if (req.url === '/api/events' && req.method === 'GET') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -78,7 +79,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 5. Telemetry Ingress
+  // 5. Telemetry Ingress Endpoint
   if (req.url === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -87,8 +88,8 @@ const server = http.createServer((req, res) => {
         const payload = JSON.parse(body || '{}');
         const point = {
           shiftId: payload.shiftId || 'shift-998',
-          lat: payload.lat || -17.8252,
-          lng: payload.lng || 31.0335,
+          lat: payload.lat || -20.1585,
+          lng: payload.lng || 28.6028,
           speed: payload.speed || 45,
           timestamp: new Date().toISOString()
         };
@@ -104,7 +105,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 6. Protected: Marshal Clearance Verification
+  // 6. Protected: Marshal Clearance Verification Endpoint
   if (req.url === '/api/clearance/verify' && req.method === 'POST') {
     const token = AuthEngine.extractTokenFromHeader(req.headers.authorization);
     const auth = token ? AuthEngine.verifyToken(token) : null;
@@ -138,7 +139,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 7. Join Rank Queue
+  // 7. Join Rank Queue Endpoint
   if (req.url === '/api/rank/join' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -157,7 +158,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 8. Depart Rank & Settle
+  // 8. Depart Rank & Financial Settlement Endpoint
   if (req.url === '/api/rank/depart' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -184,7 +185,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 9. Close Shift
+  // 9. Close Shift Endpoint
   if (req.url === '/api/shift/close' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -206,7 +207,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 10. Default Debug Web Terminal
+  // 10. Default Terminal Dashboard (Home)
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -228,7 +229,7 @@ const server = http.createServer((req, res) => {
         </style>
       </head>
       <body>
-        <h1>MUSHIKASHIKA FLEET TERMINAL (AUTH ENABLED)</h1>
+        <h1>MUSHIKASHIKA FLEET TERMINAL (BULAWAYO LIVE TELEMETRY)</h1>
         <div class="grid">
           <div class="card">
             <h2>Driver Shift Status</h2>
@@ -250,7 +251,7 @@ const server = http.createServer((req, res) => {
           </div>
           <div class="card">
             <h2>Control Actions</h2>
-            <button onclick="sendGps()">Send GPS</button>
+            <button onclick="sendGps()">Send Manual GPS</button>
             <button onclick="joinQueue()">Join Rank Queue</button>
             <button onclick="verifyRank()">Marshal Clearance (Auth)</button>
             <button onclick="departRank()">Verify & Depart</button>
@@ -301,7 +302,7 @@ const server = http.createServer((req, res) => {
             await fetch('/api/telemetry', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ lat: -17.8252, lng: 31.0335, speed: Math.floor(Math.random() * 30) + 30 })
+              body: JSON.stringify({ lat: -20.1585, lng: 28.6028, speed: Math.floor(Math.random() * 30) + 30 })
             });
           }
 
@@ -351,7 +352,7 @@ const server = http.createServer((req, res) => {
             const data = JSON.parse(event.data);
             if (data.type === 'TELEMETRY_UPDATE') {
               document.getElementById('telemetry').innerText = data.payload.lat + ', ' + data.payload.lng + ' (' + data.payload.speed + ' km/h)';
-              log('[TELEMETRY] Broadcast received.');
+              log('[TELEMETRY] Ascot -> CBD -> Luveve GPS point streamed.');
             } else if (data.type === 'CLEARANCE_UPDATE') {
               fetchStatus();
               log('[CLEARANCE] HMAC Signature verified.');
@@ -391,6 +392,12 @@ mockDb.trustScores.set('driver-001', 85);
 
 server.listen(PORT, () => {
   console.log(`\n==================================================`);
-  console.log(` 🚀 SERVER LIVE AT: http://localhost:${PORT}`);
+  console.log(` 🚀 BULAWAYO FLEET SERVER LIVE AT: http://localhost:${PORT}`);
   console.log(`==================================================\n`);
+
+  // Start automated GPS streaming for Bulawayo route loop
+  TelemetryEmulator.startSimulation('shift-998', (point) => {
+    mockRedis.set('location:shift-998', JSON.stringify(point));
+    broadcastEvent('TELEMETRY_UPDATE', point);
+  });
 });
