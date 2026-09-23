@@ -30,6 +30,16 @@ const server = http.createServer((req, res) => {
     res.writeHead(204);
     res.end();
     return;
+      // 0. Serve Service Worker & PWA Scripts
+  if (req.url === '/sw.js') {
+    res.writeHead(200, { 'Content-Type': 'application/javascript' });
+    res.end(`
+      self.addEventListener('install', (e) => self.skipWaiting());
+      self.addEventListener('activate', (e) => self.clients.claim());
+    `);
+    return;
+  }
+
   }
 
   // 1. Dedicated Role Views
