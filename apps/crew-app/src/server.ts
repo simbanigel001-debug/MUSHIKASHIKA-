@@ -1,5 +1,4 @@
 // apps/crew-app/src/server.ts
-import { AlertEngine } from './alert-engine.ts';
 import http, { ServerResponse } from 'node:http';
 import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
 import { TrustEngine } from './trust-engine.ts';
@@ -11,6 +10,7 @@ import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.ts';
 import { TelemetryEmulator } from './telemetry-emulator.ts';
 import { ExportEngine } from './export-engine.ts';
 import { OfflineEngine, type OfflineQueueItem } from './offline-engine.ts';
+import { AlertEngine } from './alert-engine.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -31,7 +31,9 @@ const server = http.createServer((req, res) => {
     res.writeHead(204);
     res.end();
     return;
-      // 0. Serve Service Worker & PWA Scripts
+  }
+
+  // 0. Service Worker Route
   if (req.url === '/sw.js') {
     res.writeHead(200, { 'Content-Type': 'application/javascript' });
     res.end(`
@@ -39,8 +41,6 @@ const server = http.createServer((req, res) => {
       self.addEventListener('activate', (e) => self.clients.claim());
     `);
     return;
-  }
-
   }
 
   // 1. Dedicated Role Views
@@ -56,7 +56,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2. CSV Export Endpoint for Fleet Owners
+  // 2. CSV Export Endpoint
   if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
     const csvData = ExportEngine.generateOwnerCsv('shift-998');
     res.writeHead(200, {
@@ -64,6 +64,13 @@ const server = http.createServer((req, res) => {
       'Content-Disposition': 'attachment; filename="owner-shift-report.csv"'
     });
     res.end(csvData);
+    return;
+  }
+
+  // 2.2 Alert History Endpoint
+  if (req.url === '/api/alerts/history' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ alerts: AlertEngine.getAlertHistory() }));
     return;
   }
 
@@ -93,7 +100,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. Auth Helper Endpoint: Quick Demo Tokens
+  // 3. Auth Helper Endpoint
   if (req.url === '/api/auth/demo-tokens' && req.method === 'GET') {
     const driverToken = AuthEngine.generateToken({ userId: 'driver-001', role: 'DRIVER', shiftId: 'shift-998' });
     const marshalToken = AuthEngine.generateToken({ userId: 'marshal-CBD-01', role: 'MARSHAL' });
@@ -116,7 +123,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 5. Fetch Shift Status
+  // 5. Shift Status Endpoint
   if (req.url === '/api/shift/status' && req.method === 'GET') {
     const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
     const trustScore = mockDb.trustScores.get('driver-001') || 80;
@@ -155,7 +162,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 7. Protected: Marshal Clearance Verification Endpoint
+  // 7. Marshal Clearance Endpoint
   if (req.url === '/api/clearance/verify' && req.method === 'POST') {
     const token = AuthEngine.extractTokenFromHeader(req.headers.authorization);
     const auth = token ? AuthEngine.verifyToken(token) : null;
@@ -208,7 +215,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 9. Depart Rank & Financial Settlement Endpoint
+  // 9. Depart Rank & Financial Settlement Endpoint (with Alerts)
   if (req.url === '/api/rank/depart' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -223,6 +230,9 @@ const server = http.createServer((req, res) => {
         if (result.success) {
           const settlement = FinanceEngine.processDepartureSettlement(shiftId, count);
           broadcastEvent('DEPARTURE_UPDATE', { entry: result.entry, settlement });
+
+          // Send Alert
+          AlertEngine.sendDepartureAlert('+263771234567', shiftId, settlement.grossFare, settlement.ownerNetPayout);
         }
 
         res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
@@ -235,7 +245,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 10. Close Shift Endpoint
+  // 10. Close Shift Endpoint (with Alerts)
   if (req.url === '/api/shift/close' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -247,6 +257,9 @@ const server = http.createServer((req, res) => {
 
         broadcastEvent('SHIFT_CLOSED', summary);
 
+        // Send EOD Alert
+        AlertEngine.sendShiftClosedAlert('+263771234567', shiftId, summary.financials.totalGross, summary.financials.totalOwnerPayout);
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, summary }));
       } catch {
@@ -257,7 +270,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 11. Default Web Terminal Dashboard (with Leaflet Map)
+  // 11. Dashboard View
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -283,7 +296,6 @@ const server = http.createServer((req, res) => {
       </head>
       <body>
         <h1>MUSHIKASHIKA FLEET TERMINAL (BULAWAYO LIVE MAP)</h1>
-        
         <div id="map"></div>
 
         <div class="grid">
@@ -440,12 +452,10 @@ const server = http.createServer((req, res) => {
               log('[QUEUE] Vehicle joined rank line.');
             } else if (data.type === 'DEPARTURE_UPDATE') {
               fetchStatus();
-              log('[FINANCE] Trip settled. Gross: $' + data.payload.settlement.grossFare);
+              log('[FINANCE] Trip settled & WhatsApp Alert Dispatched to Owner.');
             } else if (data.type === 'SHIFT_CLOSED') {
               fetchStatus();
-              log('[EOD AUDIT] Shift closed! Total Gross: $' + data.payload.financials.totalGross);
-            } else if (data.type === 'OFFLINE_SYNC_COMPLETE') {
-              log('[PWA OFFLINE] Synced ' + data.payload.syncedCount + ' offline queue items to server.');
+              log('[EOD AUDIT] Shift closed! SMS EOD Summary Dispatched to Owner.');
             }
           };
 
@@ -477,7 +487,6 @@ server.listen(PORT, () => {
   console.log(` 🚀 BULAWAYO FLEET SERVER LIVE AT: http://localhost:${PORT}`);
   console.log(`==================================================\n`);
 
-  // Start automated GPS streaming for Bulawayo route loop
   TelemetryEmulator.startSimulation('shift-998', (point) => {
     mockRedis.set('location:shift-998', JSON.stringify(point));
     broadcastEvent('TELEMETRY_UPDATE', point);
