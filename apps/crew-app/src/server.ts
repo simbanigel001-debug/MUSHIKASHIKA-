@@ -1,4 +1,5 @@
 // apps/crew-app/src/server.ts
+import { AlertEngine } from './alert-engine.ts';
 import http, { ServerResponse } from 'node:http';
 import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
 import { TrustEngine } from './trust-engine.ts';
