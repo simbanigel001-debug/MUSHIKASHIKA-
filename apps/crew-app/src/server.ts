@@ -9,7 +9,6 @@ import { AuthEngine } from './auth-engine.ts';
 import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.ts';
 import { TelemetryEmulator } from './telemetry-emulator.ts';
 import { ExportEngine } from './export-engine.ts';
-import { OfflineEngine, type OfflineQueueItem } from './offline-engine.ts';
 import { AlertEngine } from './alert-engine.ts';
 import { PassengerEngine } from './passenger-engine.ts';
 import { PASSENGER_VIEW } from './passenger-view.ts';
@@ -31,13 +30,9 @@ function broadcastEvent(type: string, payload: object) {
 }
 
 const server = http.createServer((req, res) => {
-  // Prevent unhandled server exceptions from crashing the process
-  req.on('error', (err) => {
-    console.error('Request error:', err);
-  });
-  res.on('error', (err) => {
-    console.error('Response error:', err);
-  });
+  // Catch request/response level socket errors to avoid unhandled crashes
+  req.on('error', (err) => console.error('Request Error:', err));
+  res.on('error', (err) => console.error('Response Error:', err));
 
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -49,7 +44,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Safely parse URL path excluding query params and trailing slashes
+  // Parse URL safely excluding trailing slashes and query strings
   const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const pathname = parsedUrl.pathname.replace(/\/$/, '') || '/';
 
@@ -63,22 +58,22 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 1. Dedicated Role Views & Passenger Web App
+  // 1. Dedicated Views with Safe Fallbacks
   if (pathname === '/passenger') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(PASSENGER_VIEW);
+    res.end(PASSENGER_VIEW || '<h1>Passenger View Unavailable</h1>');
     return;
   }
 
   if (pathname === '/marshal') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(MARSHAL_VIEW);
+    res.end(MARSHAL_VIEW || '<h1>Marshal View Unavailable</h1>');
     return;
   }
 
   if (pathname === '/owner') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(OWNER_VIEW);
+    res.end(OWNER_VIEW || '<h1>Owner View Unavailable</h1>');
     return;
   }
 
@@ -98,7 +93,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2.2 Lift Request Endpoints (InDrive Model)
+  // 3. Lift Request Endpoints (Street Pickups)
   if (pathname === '/api/lift/request' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -158,7 +153,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2.3 Passenger Self-Boarding API Endpoint
+  // 4. Passenger Self-Boarding & Live Tracking Endpoints
   if (pathname === '/api/passenger/board' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -186,7 +181,27 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. Auth Helper Endpoint
+  if (pathname === '/api/passenger/track' && req.method === 'GET') {
+    try {
+      const passId = parsedUrl.searchParams.get('passId') || '';
+      const trackingData = PassengerEngine.trackPassenger(passId);
+
+      if (!trackingData.pass) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'INVALID_PASS_DIGITAL_ID' }));
+        return;
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, tracking: trackingData }));
+    } catch (err: any) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
+  // 5. Auth Helper Endpoint
   if (pathname === '/api/auth/demo-tokens' && req.method === 'GET') {
     try {
       const driverToken = AuthEngine.generateToken({ userId: 'driver-001', role: 'DRIVER', shiftId: 'shift-998' });
@@ -202,7 +217,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 4. SSE Stream Endpoint
+  // 6. SSE Stream Endpoint
   if (pathname === '/api/events' && req.method === 'GET') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -214,7 +229,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 5. Shift Status Endpoint
+  // 7. Shift Status Endpoint
   if (pathname === '/api/shift/status' && req.method === 'GET') {
     try {
       const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
@@ -244,7 +259,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 6. Telemetry Ingress Endpoint
+  // 8. Telemetry Ingress Endpoint
   if (pathname === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -266,7 +281,6 @@ const server = http.createServer((req, res) => {
         mockRedis.set(`location:${point.shiftId}`, JSON.stringify(point));
         broadcastEvent('TELEMETRY_UPDATE', point);
 
-        // Run Anomaly Inspection
         const shift = mockDb.shifts.get(shiftId);
         const hasClearance = shift ? shift.status === 'DEPARTED' : false;
         const anomaly = AnomalyEngine.inspectTelemetry(shiftId, lat, lng, speed, hasClearance);
@@ -289,7 +303,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 7. Marshal Clearance Endpoint
+  // 9. Marshal Clearance Endpoint
   if (pathname === '/api/clearance/verify' && req.method === 'POST') {
     const token = AuthEngine.extractTokenFromHeader(req.headers.authorization);
     const auth = token ? AuthEngine.verifyToken(token) : null;
@@ -327,7 +341,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 8. Join Rank Queue Endpoint
+  // 10. Join Rank Queue Endpoint
   if (pathname === '/api/rank/join' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -346,7 +360,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 9. Depart Rank & Financial Settlement Endpoint (with Alerts)
+  // 11. Depart Rank & Settlement Endpoint
   if (pathname === '/api/rank/depart' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -375,7 +389,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 10. Close Shift Endpoint
+  // 12. Close Shift Endpoint
   if (pathname === '/api/shift/close' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -399,7 +413,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 11. Fleet Dashboard View (Main Map Terminal)
+  // 13. Fleet Dashboard Terminal (Main Live Map)
   if (pathname === '/' || pathname === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
