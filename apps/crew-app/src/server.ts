@@ -14,6 +14,7 @@ import { AlertEngine } from './alert-engine.ts';
 import { PassengerEngine } from './passenger-engine.ts';
 import { PASSENGER_VIEW } from './passenger-view.ts';
 import { AnomalyEngine } from './anomaly-engine.ts';
+import { LiftEngine } from './lift-engine.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -76,10 +77,58 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 2.2 Alert History Endpoint
-  if (req.url === '/api/alerts/history' && req.method === 'GET') {
+  // 2.2 Lift Request Endpoints (InDrive Model)
+  if (req.url === '/api/lift/request' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        const lift = LiftEngine.createRequest({
+          passengerPhone: data.phone || '+263770000000',
+          pickupLat: data.lat || -20.1550,
+          pickupLng: data.lng || 28.5900,
+          pickupLandmark: data.landmark || 'Ascot Shopping Centre',
+          destination: data.destination || 'CBD Main Rank',
+          passengerCount: data.seats || 1,
+          offeredFare: data.fare || 0.50
+        });
+
+        broadcastEvent('LIFT_REQUESTED', { lift, pendingCount: LiftEngine.getPendingRequests().length });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, lift }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (req.url === '/api/lift/accept' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        const lift = LiftEngine.acceptRequest(data.requestId, data.shiftId || 'shift-998');
+
+        broadcastEvent('LIFT_ACCEPTED', { lift });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, lift }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (req.url === '/api/lift/pending' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ alerts: AlertEngine.getAlertHistory() }));
+    res.end(JSON.stringify({ pendingLifts: LiftEngine.getPendingRequests() }));
     return;
   }
 
@@ -106,39 +155,6 @@ const server = http.createServer((req, res) => {
       } catch (err: any) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: err.message }));
-      }
-    });
-    return;
-  }
-
-  // 2.4 Anomaly Audit History Endpoint
-  if (req.url === '/api/anomalies' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ anomalies: AnomalyEngine.getActiveAnomalies('shift-998') }));
-    return;
-  }
-
-  // 2.5 Offline Queue Sync Endpoint
-  if (req.url === '/api/offline/sync' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      try {
-        const data = JSON.parse(body || '{}');
-        const items: OfflineQueueItem[] = data.items || [];
-        
-        items.forEach(item => {
-          OfflineEngine.enqueue(item.type, item.payload);
-        });
-
-        const syncedCount = OfflineEngine.clearQueue();
-        broadcastEvent('OFFLINE_SYNC_COMPLETE', { syncedCount });
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, syncedCount }));
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'INVALID_OFFLINE_PAYLOAD' }));
       }
     });
     return;
@@ -176,13 +192,14 @@ const server = http.createServer((req, res) => {
     const financials = FinanceEngine.getShiftFinancials('shift-998');
     const passengerCount = PassengerEngine.getBoardedCount('shift-998');
     const anomalies = AnomalyEngine.getActiveAnomalies('shift-998');
+    const pendingLifts = LiftEngine.getPendingRequests();
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null, rankQueue, financials, passengerCount, anomalies }));
+    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null, rankQueue, financials, passengerCount, anomalies, pendingLifts }));
     return;
   }
 
-  // 6. Telemetry Ingress Endpoint (with Anomaly Inspection)
+  // 6. Telemetry Ingress Endpoint
   if (req.url === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -250,7 +267,6 @@ const server = http.createServer((req, res) => {
 
         const result = TrustEngine.processClearance({ shiftId, marshalId, timestamp, signature });
         
-        // Mark shift as cleared in DB
         const shift = mockDb.shifts.get(shiftId);
         if (shift) shift.status = 'DEPARTED';
 
@@ -301,7 +317,6 @@ const server = http.createServer((req, res) => {
           const settlement = FinanceEngine.processDepartureSettlement(shiftId, count);
           broadcastEvent('DEPARTURE_UPDATE', { entry: result.entry, settlement });
 
-          // Send Alert
           AlertEngine.sendDepartureAlert('+263771234567', shiftId, settlement.grossFare, settlement.ownerNetPayout);
         }
 
@@ -315,7 +330,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 10. Close Shift Endpoint (with Alerts)
+  // 10. Close Shift Endpoint
   if (req.url === '/api/shift/close' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -327,7 +342,6 @@ const server = http.createServer((req, res) => {
 
         broadcastEvent('SHIFT_CLOSED', summary);
 
-        // Send EOD Alert
         AlertEngine.sendShiftClosedAlert('+263771234567', shiftId, summary.financials.totalGross, summary.financials.totalOwnerPayout);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -340,7 +354,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 11. Dashboard View
+  // 11. Fleet Dashboard View (Updated with Live Pickup Requests)
   if (req.url === '/' || req.url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -360,9 +374,11 @@ const server = http.createServer((req, res) => {
           button { background: #0284c7; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-right: 6px; margin-bottom: 6px; }
           button.danger { background: #ef4444; }
           button.warning { background: #d97706; }
+          button.success { background: #16a34a; }
           button:hover { opacity: 0.9; }
           #map { height: 320px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
           pre { background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 6px; font-size: 0.85rem; height: 160px; overflow-y: auto; }
+          .lift-badge { background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
         </style>
       </head>
       <body>
@@ -378,9 +394,9 @@ const server = http.createServer((req, res) => {
             <p>GPS: <span id="telemetry">None</span></p>
           </div>
           <div class="card">
-            <h2>Rank Queue Status</h2>
+            <h2>Rank & Lift Demand</h2>
             <p>Rank Position: <strong id="queuePos">Not in Queue</strong></p>
-            <p>Queue Status: <span id="queueStatus">Idle</span></p>
+            <p>Street Pickup Requests: <span class="lift-badge" id="liftCount">0 Pending</span></p>
             <p>Digital Boarded: <strong id="passengerCount" style="color:#0284c7;">0 Passengers</strong></p>
           </div>
           <div class="card">
@@ -391,6 +407,7 @@ const server = http.createServer((req, res) => {
           </div>
           <div class="card">
             <h2>Control Actions</h2>
+            <button class="success" onclick="requestTestLift()">Simulate Street Pickup Request</button>
             <button onclick="sendGps()">Send Normal GPS</button>
             <button class="warning" onclick="simulateHighSpeed()">Simulate Spoofing (140 km/h)</button>
             <button onclick="joinQueue()">Join Rank Queue</button>
@@ -408,6 +425,7 @@ const server = http.createServer((req, res) => {
         <script>
           let authToken = '';
           let map, vehicleMarker;
+          let liftMarkers = [];
 
           function initMap() {
             map = L.map('map').setView([-20.1500, 28.5830], 13);
@@ -434,13 +452,11 @@ const server = http.createServer((req, res) => {
             document.getElementById('shiftId').innerText = data.shift.status !== 'NO_ACTIVE_SHIFT' ? 'shift-998' : 'None';
             document.getElementById('shiftState').innerText = data.shift.status || 'OFFLINE';
             document.getElementById('trustScore').innerText = data.trustScore;
-            
-            if (data.trustScore < 70) {
-              document.getElementById('trustScore').style.color = '#dc2626';
-            } else if (data.trustScore < 85) {
-              document.getElementById('trustScore').style.color = '#d97706';
-            }
 
+            if (data.pendingLifts) {
+              document.getElementById('liftCount').innerText = data.pendingLifts.length + ' Pending';
+            }
+            
             if (data.passengerCount !== undefined) {
               document.getElementById('passengerCount').innerText = data.passengerCount + ' Passengers';
             }
@@ -450,10 +466,8 @@ const server = http.createServer((req, res) => {
             const activeEntry = data.rankQueue.find(q => q.shiftId === 'shift-998');
             if (activeEntry) {
               document.getElementById('queuePos').innerText = '#' + activeEntry.position;
-              document.getElementById('queueStatus').innerText = activeEntry.status;
             } else {
               document.getElementById('queuePos').innerText = 'Not in Queue';
-              document.getElementById('queueStatus').innerText = 'Idle';
             }
             if (data.financials) {
               document.getElementById('grossFare').innerText = '$' + data.financials.totalGross.toFixed(2);
@@ -468,8 +482,22 @@ const server = http.createServer((req, res) => {
             if (vehicleMarker && map) {
               const newLatLng = new L.LatLng(point.lat, point.lng);
               vehicleMarker.setLatLng(newLatLng);
-              map.panTo(newLatLng);
             }
+          }
+
+          async function requestTestLift() {
+            await fetch('/api/lift/request', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                phone: '+263779876543',
+                landmark: 'Ascot Shopping Centre Gate',
+                seats: 2,
+                fare: 1.00,
+                lat: -20.1530,
+                lng: 28.5950
+              })
+            });
           }
 
           async function sendGps() {
@@ -534,10 +562,19 @@ const server = http.createServer((req, res) => {
             const data = JSON.parse(event.data);
             if (data.type === 'TELEMETRY_UPDATE') {
               updateTelemetryUI(data.payload);
-              log('[MAP UPDATE] Vehicle moving: ' + data.payload.lat + ', ' + data.payload.lng);
+            } else if (data.type === 'LIFT_REQUESTED') {
+              fetchStatus();
+              const lift = data.payload.lift;
+              log('🙋‍♂️ [STREET LIFT REQUEST] Pickup at ' + lift.pickupLandmark + ' (' + lift.passengerCount + ' seat(s) for $' + lift.offeredFare.toFixed(2) + ')');
+              
+              // Place pin on map
+              const marker = L.marker([lift.pickupLat, lift.pickupLng]).addTo(map)
+                .bindPopup('<b>Street Pickup Request</b><br>' + lift.pickupLandmark + '<br>Seats: ' + lift.passengerCount)
+                .openPopup();
+              liftMarkers.push(marker);
             } else if (data.type === 'ANOMALY_DETECTED') {
               fetchStatus();
-              log('⚠️ [ANOMALY DETECTED] ' + data.payload.anomaly.description + ' (Trust Penalty: -' + data.payload.anomaly.deductedTrust + ')');
+              log('⚠️ [ANOMALY DETECTED] ' + data.payload.anomaly.description);
             } else if (data.type === 'CLEARANCE_UPDATE') {
               fetchStatus();
               log('[CLEARANCE] HMAC Signature verified.');
@@ -546,13 +583,13 @@ const server = http.createServer((req, res) => {
               log('[QUEUE] Vehicle joined rank line.');
             } else if (data.type === 'DEPARTURE_UPDATE') {
               fetchStatus();
-              log('[FINANCE] Trip settled & WhatsApp Alert Dispatched to Owner.');
+              log('[FINANCE] Trip settled & WhatsApp Alert Dispatched.');
             } else if (data.type === 'SHIFT_CLOSED') {
               fetchStatus();
-              log('[EOD AUDIT] Shift closed! SMS EOD Summary Dispatched to Owner.');
+              log('[EOD AUDIT] Shift closed! SMS EOD Summary Dispatched.');
             } else if (data.type === 'PASSENGER_BOARDED') {
               fetchStatus();
-              log('[PASSENGER] Seat #' + data.payload.pass.seatNumber + ' reserved & paid via ' + data.payload.pass.paymentMethod);
+              log('[PASSENGER] Seat reserved via ' + data.payload.pass.paymentMethod);
             }
           };
 
