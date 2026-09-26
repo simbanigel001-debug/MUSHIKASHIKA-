@@ -22,11 +22,23 @@ const sseClients: Set<ServerResponse> = new Set();
 function broadcastEvent(type: string, payload: object) {
   const eventData = `data: ${JSON.stringify({ type, payload })}\n\n`;
   for (const client of sseClients) {
-    client.write(eventData);
+    try {
+      client.write(eventData);
+    } catch {
+      sseClients.delete(client);
+    }
   }
 }
 
 const server = http.createServer((req, res) => {
+  // Prevent unhandled server exceptions from crashing the process
+  req.on('error', (err) => {
+    console.error('Request error:', err);
+  });
+  res.on('error', (err) => {
+    console.error('Response error:', err);
+  });
+
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -37,8 +49,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Safely parse URL path excluding query params and trailing slashes
+  const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const pathname = parsedUrl.pathname.replace(/\/$/, '') || '/';
+
   // 0. Service Worker Route
-  if (req.url === '/sw.js') {
+  if (pathname === '/sw.js') {
     res.writeHead(200, { 'Content-Type': 'application/javascript' });
     res.end(`
       self.addEventListener('install', (e) => self.skipWaiting());
@@ -48,37 +64,42 @@ const server = http.createServer((req, res) => {
   }
 
   // 1. Dedicated Role Views & Passenger Web App
-  if (req.url === '/passenger') {
+  if (pathname === '/passenger') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(PASSENGER_VIEW);
     return;
   }
 
-  if (req.url === '/marshal') {
+  if (pathname === '/marshal') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(MARSHAL_VIEW);
     return;
   }
 
-  if (req.url === '/owner') {
+  if (pathname === '/owner') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(OWNER_VIEW);
     return;
   }
 
   // 2. CSV Export Endpoint
-  if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
-    const csvData = ExportEngine.generateOwnerCsv('shift-998');
-    res.writeHead(200, {
-      'Content-Type': 'text/csv',
-      'Content-Disposition': 'attachment; filename="owner-shift-report.csv"'
-    });
-    res.end(csvData);
+  if (pathname === '/api/owner/export-csv' && req.method === 'GET') {
+    try {
+      const csvData = ExportEngine.generateOwnerCsv('shift-998');
+      res.writeHead(200, {
+        'Content-Type': 'text/csv',
+        'Content-Disposition': 'attachment; filename="owner-shift-report.csv"'
+      });
+      res.end(csvData);
+    } catch (err: any) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
     return;
   }
 
   // 2.2 Lift Request Endpoints (InDrive Model)
-  if (req.url === '/api/lift/request' && req.method === 'POST') {
+  if (pathname === '/api/lift/request' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -106,7 +127,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.url === '/api/lift/accept' && req.method === 'POST') {
+  if (pathname === '/api/lift/accept' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -126,14 +147,19 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.url === '/api/lift/pending' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ pendingLifts: LiftEngine.getPendingRequests() }));
+  if (pathname === '/api/lift/pending' && req.method === 'GET') {
+    try {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ pendingLifts: LiftEngine.getPendingRequests() }));
+    } catch (err: any) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
     return;
   }
 
   // 2.3 Passenger Self-Boarding API Endpoint
-  if (req.url === '/api/passenger/board' && req.method === 'POST') {
+  if (pathname === '/api/passenger/board' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -161,18 +187,23 @@ const server = http.createServer((req, res) => {
   }
 
   // 3. Auth Helper Endpoint
-  if (req.url === '/api/auth/demo-tokens' && req.method === 'GET') {
-    const driverToken = AuthEngine.generateToken({ userId: 'driver-001', role: 'DRIVER', shiftId: 'shift-998' });
-    const marshalToken = AuthEngine.generateToken({ userId: 'marshal-CBD-01', role: 'MARSHAL' });
-    const ownerToken = AuthEngine.generateToken({ userId: 'owner-101', role: 'OWNER' });
+  if (pathname === '/api/auth/demo-tokens' && req.method === 'GET') {
+    try {
+      const driverToken = AuthEngine.generateToken({ userId: 'driver-001', role: 'DRIVER', shiftId: 'shift-998' });
+      const marshalToken = AuthEngine.generateToken({ userId: 'marshal-CBD-01', role: 'MARSHAL' });
+      const ownerToken = AuthEngine.generateToken({ userId: 'owner-101', role: 'OWNER' });
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ driverToken, marshalToken, ownerToken }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ driverToken, marshalToken, ownerToken }));
+    } catch (err: any) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
     return;
   }
 
   // 4. SSE Stream Endpoint
-  if (req.url === '/api/events' && req.method === 'GET') {
+  if (pathname === '/api/events' && req.method === 'GET') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -184,32 +215,37 @@ const server = http.createServer((req, res) => {
   }
 
   // 5. Shift Status Endpoint
-  if (req.url === '/api/shift/status' && req.method === 'GET') {
-    const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
-    const trustScore = mockDb.trustScores.get('driver-001') || 85;
-    const geo = mockRedis.get('location:shift-998');
-    const rankQueue = QueueEngine.getQueueStatus('CBD-MAIN-RANK');
-    const financials = FinanceEngine.getShiftFinancials('shift-998');
-    const passengerCount = PassengerEngine.getBoardedCount('shift-998');
-    const anomalies = AnomalyEngine.getActiveAnomalies('shift-998');
-    const pendingLifts = LiftEngine.getPendingRequests();
+  if (pathname === '/api/shift/status' && req.method === 'GET') {
+    try {
+      const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
+      const trustScore = mockDb.trustScores.get('driver-001') || 85;
+      const geo = mockRedis.get('location:shift-998');
+      const rankQueue = QueueEngine.getQueueStatus('CBD-MAIN-RANK');
+      const financials = FinanceEngine.getShiftFinancials('shift-998');
+      const passengerCount = PassengerEngine.getBoardedCount('shift-998');
+      const anomalies = AnomalyEngine.getActiveAnomalies('shift-998');
+      const pendingLifts = LiftEngine.getPendingRequests();
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      shift,
-      trustScore,
-      latestGeo: geo ? JSON.parse(geo) : null,
-      rankQueue,
-      financials,
-      passengerCount,
-      anomalies,
-      pendingLifts
-    }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        shift,
+        trustScore,
+        latestGeo: geo ? JSON.parse(geo) : null,
+        rankQueue,
+        financials,
+        passengerCount,
+        anomalies,
+        pendingLifts
+      }));
+    } catch (err: any) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
     return;
   }
 
   // 6. Telemetry Ingress Endpoint
-  if (req.url === '/api/telemetry' && req.method === 'POST') {
+  if (pathname === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -253,8 +289,8 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 7. Marshal Clearance Endpoint (HMAC Signature Verification)
-  if (req.url === '/api/clearance/verify' && req.method === 'POST') {
+  // 7. Marshal Clearance Endpoint
+  if (pathname === '/api/clearance/verify' && req.method === 'POST') {
     const token = AuthEngine.extractTokenFromHeader(req.headers.authorization);
     const auth = token ? AuthEngine.verifyToken(token) : null;
 
@@ -292,7 +328,7 @@ const server = http.createServer((req, res) => {
   }
 
   // 8. Join Rank Queue Endpoint
-  if (req.url === '/api/rank/join' && req.method === 'POST') {
+  if (pathname === '/api/rank/join' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -310,8 +346,8 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 9. Depart Rank & Financial Settlement Endpoint (with WhatsApp/SMS Alerts)
-  if (req.url === '/api/rank/depart' && req.method === 'POST') {
+  // 9. Depart Rank & Financial Settlement Endpoint (with Alerts)
+  if (pathname === '/api/rank/depart' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -340,7 +376,7 @@ const server = http.createServer((req, res) => {
   }
 
   // 10. Close Shift Endpoint
-  if (req.url === '/api/shift/close' && req.method === 'POST') {
+  if (pathname === '/api/shift/close' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -363,8 +399,8 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 11. Fleet Dashboard View (Bulawayo Map Terminal)
-  if (req.url === '/' || req.url === '/index.html') {
+  // 11. Fleet Dashboard View (Main Map Terminal)
+  if (pathname === '/' || pathname === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
       <!DOCTYPE html>
@@ -611,7 +647,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  res.writeHead(404);
+  res.writeHead(404, { 'Content-Type': 'text/plain' });
   res.end('Not Found');
 });
 
@@ -628,6 +664,8 @@ server.listen(PORT, () => {
   console.log(`\n==================================================`);
   console.log(` 🚀 BULAWAYO FLEET SERVER LIVE AT: http://localhost:${PORT}`);
   console.log(` 📱 PASSENGER APP AVAILABLE AT: http://localhost:${PORT}/passenger`);
+  console.log(` 👮 MARSHAL VIEW AVAILABLE AT: http://localhost:${PORT}/marshal`);
+  console.log(` 🏢 OWNER VIEW AVAILABLE AT: http://localhost:${PORT}/owner`);
   console.log(`==================================================\n`);
 
   TelemetryEmulator.startSimulation('shift-998', (point) => {
