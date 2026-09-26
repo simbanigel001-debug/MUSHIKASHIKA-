@@ -1,154 +1,509 @@
-// apps/crew-app/src/server.ts
-import http, { ServerResponse } from 'node:http';
-import { mockDb, mockRedis } from '../../../shared/database/emulator.ts';
-import { TrustEngine } from './trust-engine.ts';
-import { QueueEngine } from './queue-engine.ts';
-import { FinanceEngine } from './finance-engine.ts';
-import { ShiftEngine } from './shift-engine.ts';
-import { AuthEngine } from './auth-engine.ts';
-import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.ts';
-import { TelemetryEmulator } from './telemetry-emulator.ts';
-import { ExportEngine } from './export-engine.ts';
-import { OfflineEngine, type OfflineQueueItem } from './offline-engine.ts';
-import { AlertEngine } from './alert-engine.ts';
-import { PassengerEngine } from './passenger-engine.ts';
-import { PASSENGER_VIEW } from './passenger-view.ts';
-import { AnomalyEngine } from './anomaly-engine.ts';
-import { LiftEngine } from './lift-engine.ts';
+import http from 'http';
+import { URL } from 'url';
 
-const PORT = 3000;
-const sseClients: Set<ServerResponse> = new Set();
+// ============================================================================
+// 1. IN-MEMORY TYPES & DATA STORES
+// ============================================================================
 
-function broadcastEvent(type: string, payload: object) {
-  const eventData = `data: ${JSON.stringify({ type, payload })}\n\n`;
-  for (const client of sseClients) {
-    client.write(eventData);
+interface LiftRequest {
+  id: string;
+  phone: string;
+  pickupLandmark: string;
+  destination: string;
+  passengerCount: number;
+  offeredFare: number;
+  paymentMethod: string;
+  lat: number;
+  lng: number;
+  status: 'PENDING' | 'ACCEPTED' | 'COMPLETED';
+  createdAt: string;
+}
+
+interface BoardingPass {
+  passId: string;
+  shiftId: string;
+  rankId: string;
+  paymentMethod: string;
+  amount: number;
+  issuedAt: string;
+}
+
+interface ChangeToken {
+  tokenId: string;
+  issuedByShiftId: string;
+  amount: number;
+  status: 'ACTIVE' | 'REDEEMED' | 'CASHED_OUT';
+  issuedAt: string;
+}
+
+const liftRequests: Map<string, LiftRequest> = new Map();
+const boardingPasses: BoardingPass[] = [];
+const changeTokens: Map<string, ChangeToken> = new Map();
+const clients: Set<http.ServerResponse> = new Set();
+
+// ============================================================================
+// 2. CORE BUSINESS ENGINES
+// ============================================================================
+
+class TokenEngine {
+  static issueChangeToken(shiftId: string, amount: number): ChangeToken {
+    const randomCode = Math.floor(1000 + Math.random() * 9000);
+    const tokenId = `CHG-${randomCode}`;
+    
+    const token: ChangeToken = {
+      tokenId,
+      issuedByShiftId: shiftId,
+      amount,
+      status: 'ACTIVE',
+      issuedAt: new Date().toISOString()
+    };
+
+    changeTokens.set(tokenId, token);
+    return token;
+  }
+
+  static redeemToken(tokenId: string, requiredAmount: number): { success: boolean; remainingBalance: number; message: string } {
+    const token = changeTokens.get(tokenId);
+    if (!token) return { success: false, remainingBalance: 0, message: 'INVALID_TOKEN' };
+    if (token.status !== 'ACTIVE') return { success: false, remainingBalance: 0, message: 'TOKEN_ALREADY_USED' };
+    if (token.amount < requiredAmount) return { success: false, remainingBalance: token.amount, message: 'INSUFFICIENT_TOKEN_BALANCE' };
+
+    token.amount -= requiredAmount;
+    if (token.amount === 0) {
+      token.status = 'REDEEMED';
+    }
+    
+    changeTokens.set(tokenId, token);
+    return { success: true, remainingBalance: token.amount, message: 'TOKEN_REDEEMED' };
   }
 }
 
-const server = http.createServer((req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+// ============================================================================
+// 3. SERVER-SENT EVENTS (SSE) BROADCAST ENGINE
+// ============================================================================
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
+function broadcastEvent(eventType: string, data: Record<string, any>) {
+  const payload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of clients) {
+    client.write(payload);
   }
+}
 
-  // 0. Service Worker Route
-  if (req.url === '/sw.js') {
-    res.writeHead(200, { 'Content-Type': 'application/javascript' });
+// ============================================================================
+// 4. EMBEDDED PASSENGER WEB UI HTML (MOBILE RESPONSIVE)
+// ============================================================================
+
+const PASSENGER_HTML = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bulawayo Transit - Passenger App</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --green: #2ea043;
+      --blue: #58a6ff;
+      --orange: #d29922;
+      --purple: #8957e5;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .app-container {
+      width: 100%;
+      max-width: 420px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .header h1 {
+      color: var(--blue);
+      font-size: 1.4rem;
+      margin: 0 0 4px 0;
+    }
+    .header p {
+      font-size: 0.85rem;
+      color: #8b949e;
+      margin: 0;
+    }
+    .nav-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+    }
+    .tab-btn.active {
+      background: var(--blue);
+      color: #ffffff;
+      border-color: var(--blue);
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .form-group {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: #8b949e;
+      margin-bottom: 4px;
+    }
+    input, select {
+      width: 100%;
+      padding: 10px;
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      box-sizing: border-box;
+      font-size: 0.95rem;
+    }
+    .btn {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      font-weight: bold;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn-green { background: var(--green); color: white; }
+    .btn-orange { background: var(--orange); color: white; }
+    .btn-purple { background: var(--purple); color: white; margin-top: 8px; }
+    .btn:hover { opacity: 0.9; }
+    .ticket-pass {
+      border: 2px dashed var(--green);
+      background: rgba(46, 160, 67, 0.1);
+      padding: 16px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .token-box {
+      background: #21262d;
+      border: 1px solid var(--purple);
+      padding: 10px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 1.1rem;
+      color: #d2a8ff;
+      letter-spacing: 2px;
+      margin: 8px 0;
+    }
+    .hidden { display: none; }
+    .status-pill {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: bold;
+      background: #21262d;
+      color: var(--blue);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="app-container">
+    <div class="header">
+      <h1>MUSHIKASHIKA PASSENGER</h1>
+      <p>Bulawayo Digital Transit Network</p>
+    </div>
+
+    <!-- Mode Selector Tabs -->
+    <div class="nav-tabs">
+      <button class="tab-btn active" id="tabRankBtn" onclick="switchMode('RANK')">Rank Boarding</button>
+      <button class="tab-btn" id="tabLiftBtn" onclick="switchMode('LIFT')">Street Pickup 🙋‍♂️</button>
+    </div>
+
+    <!-- Mode 1: Standard Rank Terminal Boarding -->
+    <div id="rankMode" class="card">
+      <h3 style="margin-top:0; color: var(--blue);">CBD Main Rank Pass</h3>
+      <div class="form-group">
+        <label>Payment Method</label>
+        <select id="paymentMethod" onchange="toggleTokenInput()">
+          <option value="CASH">💵 USD Cash at Rank ($0.50)</option>
+          <option value="TOKEN">🎟️ Pre-paid Transit Token / Change Code</option>
+          <option value="ECOCASH">📲 EcoCash Wallet</option>
+          <option value="INNBUCKS">⚡ InnBucks Wallet</option>
+        </select>
+      </div>
+      <div class="form-group hidden" id="tokenGroup">
+        <label>Enter Token / Change Code</label>
+        <input type="text" id="tokenInput" placeholder="e.g. CHG-8821">
+      </div>
+      <button class="btn btn-green" onclick="buyRankPass()">Confirm & Reserve Seat ($0.50)</button>
+    </div>
+
+    <!-- Mode 2: InDrive-Style Street Pickup Request -->
+    <div id="liftMode" class="card hidden">
+      <h3 style="margin-top:0; color: var(--orange);">Request Street Lift</h3>
+      <div class="form-group">
+        <label>Pickup Point / Landmark</label>
+        <input type="text" id="liftLandmark" value="Ascot Shopping Centre Gate">
+      </div>
+      <div class="form-group">
+        <label>Destination</label>
+        <input type="text" id="liftDest" value="CBD Main Rank">
+      </div>
+      <div class="form-group">
+        <label>Seats Needed</label>
+        <input type="number" id="liftSeats" value="1" min="1" max="5">
+      </div>
+      <div class="form-group">
+        <label>Payment Method for Lift</label>
+        <select id="liftPaymentMethod">
+          <option value="CASH">💵 USD Cash to Driver/Conductor</option>
+          <option value="TOKEN">🎟️ Transit / Change Token Redemption</option>
+          <option value="ECOCASH">📲 Direct Mobile Wallet Transfer</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Offered Fare per Seat ($)</label>
+        <input type="number" id="liftFare" value="0.50" step="0.25">
+      </div>
+      <button class="btn btn-orange" onclick="requestStreetLift()">Broadcast Lift Request</button>
+    </div>
+
+    <!-- Conductor Quick Change Simulator -->
+    <div class="card">
+      <h3 style="margin-top:0; color: var(--purple);">Conductor Tools</h3>
+      <p style="font-size:0.8rem; color:#8b949e;">Simulate issuing change tokens to passengers paying large notes.</p>
+      <div class="form-group">
+        <label>Change Amount Due ($)</label>
+        <input type="number" id="changeAmt" value="4.50" step="0.50">
+      </div>
+      <button class="btn btn-purple" onclick="issueConductorChange()">Issue Change Token Code</button>
+    </div>
+
+    <!-- Dynamic Ticket / Confirmation Display -->
+    <div id="ticketContainer" class="card hidden">
+      <div class="ticket-pass" id="ticketContent"></div>
+    </div>
+  </div>
+
+  <script>
+    let activeMode = 'RANK';
+
+    function toggleTokenInput() {
+      const method = document.getElementById('paymentMethod').value;
+      document.getElementById('tokenGroup').classList.toggle('hidden', method !== 'TOKEN');
+    }
+
+    function switchMode(mode) {
+      activeMode = mode;
+      document.getElementById('tabRankBtn').classList.toggle('active', mode === 'RANK');
+      document.getElementById('tabLiftBtn').classList.toggle('active', mode === 'LIFT');
+      
+      document.getElementById('rankMode').classList.toggle('hidden', mode !== 'RANK');
+      document.getElementById('liftMode').classList.toggle('hidden', mode !== 'LIFT');
+      document.getElementById('ticketContainer').classList.add('hidden');
+    }
+
+    async function buyRankPass() {
+      const method = document.getElementById('paymentMethod').value;
+      const tokenId = document.getElementById('tokenInput').value;
+
+      const res = await fetch('/api/passenger/board', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          shiftId: 'shift-998', 
+          rankId: 'CBD-MAIN-RANK', 
+          method: method === 'TOKEN' ? 'TOKEN:' + tokenId : method
+        })
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        const generatedToken = 'TOK-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+        document.getElementById('ticketContainer').classList.remove('hidden');
+        document.getElementById('ticketContent').innerHTML = \`
+          <span class="status-pill">\${method === 'CASH' ? 'CASH RESERVATION' : 'CONFIRMED PASS'}</span>
+          <h2 style="margin: 8px 0; color: #3fb950;">Pass #\${data.pass.passId.slice(-6)}</h2>
+          <p style="margin: 4px 0;">Payment: <strong>\${data.pass.paymentMethod}</strong></p>
+          <div class="token-box">\${method === 'TOKEN' ? (tokenId || 'TOK-REDEEMED') : generatedToken}</div>
+          <p style="margin: 4px 0; font-size: 0.8rem; color: #8b949e;">Show this code or hand cash to conductor upon boarding</p>
+        \`;
+      } else {
+        alert(data.error || 'Failed to process board request');
+      }
+    }
+
+    async function requestStreetLift() {
+      const landmark = document.getElementById('liftLandmark').value;
+      const destination = document.getElementById('liftDest').value;
+      const seats = parseInt(document.getElementById('liftSeats').value);
+      const fare = parseFloat(document.getElementById('liftFare').value);
+      const paymentMethod = document.getElementById('liftPaymentMethod').value;
+
+      const res = await fetch('/api/lift/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: '+26377' + Math.floor(1000000 + Math.random() * 9000000),
+          landmark,
+          destination,
+          seats,
+          fare,
+          paymentMethod,
+          lat: -20.1530,
+          lng: 28.5950
+        })
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        document.getElementById('ticketContainer').classList.remove('hidden');
+        document.getElementById('ticketContent').innerHTML = \`
+          <span class="status-pill" style="color: var(--orange);">BROADCASTING TO COMBIS...</span>
+          <h3 style="margin: 8px 0; color: var(--orange);">Request Live!</h3>
+          <p style="margin: 4px 0;">Pickup: <strong>\${data.lift.pickupLandmark}</strong></p>
+          <p style="margin: 4px 0;">Seats: <strong>\${data.lift.passengerCount}</strong> | Payment: <strong>\${paymentMethod}</strong></p>
+          <p style="margin: 4px 0;">Fare Offer: <strong>$\${data.lift.offeredFare.toFixed(2)}</strong></p>
+          <p style="margin: 4px 0; font-size: 0.8rem; color: #8b949e;">Nearby kombis along the route can now accept your lift.</p>
+        \`;
+      }
+    }
+
+    async function issueConductorChange() {
+      const amount = parseFloat(document.getElementById('changeAmt').value);
+      const res = await fetch('/api/conductor/issue-change', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shiftId: 'shift-998', amount })
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        document.getElementById('ticketContainer').classList.remove('hidden');
+        document.getElementById('ticketContent').innerHTML = \`
+          <span class="status-pill" style="color: var(--purple);">CHANGE TOKEN ISSUED</span>
+          <h2 style="margin: 8px 0; color: #d2a8ff;">$\${data.token.amount.toFixed(2)} USD</h2>
+          <div class="token-box">\${data.token.tokenId}</div>
+          <p style="margin: 4px 0; font-size: 0.8rem; color: #8b949e;">Passenger can redeem this code on their next ride or cash out at CBD Rank</p>
+        \`;
+      }
+    }
+  </script>
+</body>
+</html>
+`;
+
+// ============================================================================
+// 5. MAIN HTTP SERVER AND API ROUTING
+// ============================================================================
+
+const server = http.createServer((req, res) => {
+  const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost:3000'}`);
+  const pathname = parsedUrl.pathname;
+
+  // Serve Main Terminal
+  if (pathname === '/' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(`
-      self.addEventListener('install', (e) => self.skipWaiting());
-      self.addEventListener('activate', (e) => self.clients.claim());
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Bulawayo Fleet Live Server</title>
+        <style>
+          body { font-family: monospace; background: #0d1117; color: #58a6ff; padding: 20px; }
+          .card { background: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 8px; margin-bottom: 10px; }
+          a { color: #2ea043; text-decoration: none; font-size: 1.2rem; font-weight: bold; }
+        </style>
+      </head>
+      <body>
+        <h1>==================================================</h1>
+        <h1>BULAWAYO FLEET SERVER LIVE AT: http://localhost:3000</h1>
+        <h1>PASSENGER APP AVAILABLE AT: http://localhost:3000/passenger</h1>
+        <h1>==================================================</h1>
+        <div class="card">
+          <p>GPS Telemetry Emulator (Bulawayo Route) started for shift: <strong>shift-998</strong></p>
+          <a href="/passenger" target="_blank">Open Passenger App Interface &rarr;</a>
+        </div>
+      </body>
+      </html>
     `);
     return;
   }
 
-  // 1. Dedicated Role Views & Passenger Web App
-  if (req.url === '/passenger') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(PASSENGER_VIEW);
+  // Serve Passenger Web App Interface
+  if (pathname === '/passenger' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(PASSENGER_HTML);
     return;
   }
 
-  if (req.url === '/marshal') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(MARSHAL_VIEW);
-    return;
-  }
-
-  if (req.url === '/owner') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(OWNER_VIEW);
-    return;
-  }
-
-  // 2. CSV Export Endpoint
-  if (req.url === '/api/owner/export-csv' && req.method === 'GET') {
-    const csvData = ExportEngine.generateOwnerCsv('shift-998');
+  // SSE Stream Endpoint
+  if (pathname === '/events' && req.method === 'GET') {
     res.writeHead(200, {
-      'Content-Type': 'text/csv',
-      'Content-Disposition': 'attachment; filename="owner-shift-report.csv"'
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
     });
-    res.end(csvData);
+    clients.add(res);
+    req.on('close', () => clients.delete(res));
     return;
   }
 
-  // 2.2 Lift Request Endpoints (InDrive Model)
-  if (req.url === '/api/lift/request' && req.method === 'POST') {
+  // API: Passenger Boarding Pass
+  if (pathname === '/api/passenger/board' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
         const data = JSON.parse(body || '{}');
-        const lift = LiftEngine.createRequest({
-          passengerPhone: data.phone || '+263770000000',
-          pickupLat: data.lat || -20.1550,
-          pickupLng: data.lng || 28.5900,
-          pickupLandmark: data.landmark || 'Ascot Shopping Centre',
-          destination: data.destination || 'CBD Main Rank',
-          passengerCount: data.seats || 1,
-          offeredFare: data.fare || 0.50
-        });
+        const method = data.method || 'CASH';
 
-        broadcastEvent('LIFT_REQUESTED', { lift, pendingCount: LiftEngine.getPendingRequests().length });
+        if (method.startsWith('TOKEN:')) {
+          const tokenId = method.replace('TOKEN:', '').trim();
+          const redemption = TokenEngine.redeemToken(tokenId, 0.50);
+          if (!redemption.success && tokenId !== '') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: redemption.message }));
+            return;
+          }
+        }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, lift }));
-      } catch (err: any) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: err.message }));
-      }
-    });
-    return;
-  }
+        const pass: BoardingPass = {
+          passId: `PASS-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          shiftId: data.shiftId || 'shift-998',
+          rankId: data.rankId || 'CBD-MAIN-RANK',
+          paymentMethod: method,
+          amount: 0.50,
+          issuedAt: new Date().toISOString()
+        };
 
-  if (req.url === '/api/lift/accept' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      try {
-        const data = JSON.parse(body || '{}');
-        const lift = LiftEngine.acceptRequest(data.requestId, data.shiftId || 'shift-998');
-
-        broadcastEvent('LIFT_ACCEPTED', { lift });
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, lift }));
-      } catch (err: any) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: err.message }));
-      }
-    });
-    return;
-  }
-
-  if (req.url === '/api/lift/pending' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ pendingLifts: LiftEngine.getPendingRequests() }));
-    return;
-  }
-
-  // 2.3 Passenger Self-Boarding API Endpoint
-  if (req.url === '/api/passenger/board' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      try {
-        const data = JSON.parse(body || '{}');
-        const pass = PassengerEngine.issuePass(
-          data.shiftId || 'shift-998',
-          data.rankId || 'CBD-MAIN-RANK',
-          data.method || 'ECOCASH'
-        );
-
-        broadcastEvent('PASSENGER_BOARDED', {
-          pass,
-          count: PassengerEngine.getBoardedCount(data.shiftId || 'shift-998')
-        });
+        boardingPasses.push(pass);
+        broadcastEvent('PASSENGER_BOARDED', { pass });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, pass }));
@@ -160,470 +515,74 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. Auth Helper Endpoint
-  if (req.url === '/api/auth/demo-tokens' && req.method === 'GET') {
-    const driverToken = AuthEngine.generateToken({ userId: 'driver-001', role: 'DRIVER', shiftId: 'shift-998' });
-    const marshalToken = AuthEngine.generateToken({ userId: 'marshal-CBD-01', role: 'MARSHAL' });
-    const ownerToken = AuthEngine.generateToken({ userId: 'owner-101', role: 'OWNER' });
-
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ driverToken, marshalToken, ownerToken }));
-    return;
-  }
-
-  // 4. SSE Stream Endpoint
-  if (req.url === '/api/events' && req.method === 'GET') {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive'
-    });
-    sseClients.add(res);
-    req.on('close', () => sseClients.delete(res));
-    return;
-  }
-
-  // 5. Shift Status Endpoint
-  if (req.url === '/api/shift/status' && req.method === 'GET') {
-    const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
-    const trustScore = mockDb.trustScores.get('driver-001') || 85;
-    const geo = mockRedis.get('location:shift-998');
-    const rankQueue = QueueEngine.getQueueStatus('CBD-MAIN-RANK');
-    const financials = FinanceEngine.getShiftFinancials('shift-998');
-    const passengerCount = PassengerEngine.getBoardedCount('shift-998');
-    const anomalies = AnomalyEngine.getActiveAnomalies('shift-998');
-    const pendingLifts = LiftEngine.getPendingRequests();
-
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null, rankQueue, financials, passengerCount, anomalies, pendingLifts }));
-    return;
-  }
-
-  // 6. Telemetry Ingress Endpoint
-  if (req.url === '/api/telemetry' && req.method === 'POST') {
+  // API: Street Lift Request (InDrive Style)
+  if (pathname === '/api/lift/request' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
-        const payload = JSON.parse(body || '{}');
-        const shiftId = payload.shiftId || 'shift-998';
-        const lat = payload.lat || -20.1585;
-        const lng = payload.lng || 28.6028;
-        const speed = payload.speed || 45;
-
-        const point = {
-          shiftId,
-          lat,
-          lng,
-          speed,
-          timestamp: new Date().toISOString()
+        const data = JSON.parse(body || '{}');
+        const lift: LiftRequest = {
+          id: `LIFT-${Date.now()}`,
+          phone: data.phone || '+263770000000',
+          pickupLandmark: data.landmark || 'Ascot Shopping Centre',
+          destination: data.destination || 'CBD Main Rank',
+          passengerCount: data.seats || 1,
+          offeredFare: data.fare || 0.50,
+          paymentMethod: data.paymentMethod || 'CASH',
+          lat: data.lat || -20.1530,
+          lng: data.lng || 28.5950,
+          status: 'PENDING',
+          createdAt: new Date().toISOString()
         };
-        mockRedis.set(`location:${point.shiftId}`, JSON.stringify(point));
-        broadcastEvent('TELEMETRY_UPDATE', point);
 
-        // Run Anomaly Inspection
-        const shift = mockDb.shifts.get(shiftId);
-        const hasClearance = shift ? shift.status === 'DEPARTED' : false;
-        const anomaly = AnomalyEngine.inspectTelemetry(shiftId, lat, lng, speed, hasClearance);
-
-        if (anomaly) {
-          const currentTrust = mockDb.trustScores.get('driver-001') || 85;
-          const newTrust = Math.max(0, currentTrust - anomaly.deductedTrust);
-          mockDb.trustScores.set('driver-001', newTrust);
-
-          broadcastEvent('ANOMALY_DETECTED', { anomaly, newTrust });
-        }
+        liftRequests.set(lift.id, lift);
+        broadcastEvent('STREET_LIFT_REQUESTED', { lift });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'TELEMETRY_UPDATED', point, anomalyDetected: !!anomaly }));
-      } catch {
+        res.end(JSON.stringify({ success: true, lift }));
+      } catch (err: any) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'INVALID_JSON' }));
+        res.end(JSON.stringify({ success: false, error: err.message }));
       }
     });
     return;
   }
 
-  // 7. Marshal Clearance Endpoint
-  if (req.url === '/api/clearance/verify' && req.method === 'POST') {
-    const token = AuthEngine.extractTokenFromHeader(req.headers.authorization);
-    const auth = token ? AuthEngine.verifyToken(token) : null;
-
-    if (!auth || (auth.role !== 'MARSHAL' && auth.role !== 'DRIVER')) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'UNAUTHORIZED_MARSHAL_ACCESS' }));
-      return;
-    }
-
+  // API: Conductor Issues Change Token
+  if (pathname === '/api/conductor/issue-change' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
         const data = JSON.parse(body || '{}');
         const shiftId = data.shiftId || 'shift-998';
-        const marshalId = auth.userId;
-        const timestamp = new Date().toISOString();
-        const signature = TrustEngine.generateSignature({ shiftId, marshalId, timestamp });
+        const changeAmount = data.amount || 4.50;
 
-        const result = TrustEngine.processClearance({ shiftId, marshalId, timestamp, signature });
-        
-        const shift = mockDb.shifts.get(shiftId);
-        if (shift) shift.status = 'DEPARTED';
-
-        broadcastEvent('CLEARANCE_UPDATE', result);
-
-        res.writeHead(result.success ? 200 : 401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(result));
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, reason: 'MALFORMED_PAYLOAD' }));
-      }
-    });
-    return;
-  }
-
-  // 8. Join Rank Queue Endpoint
-  if (req.url === '/api/rank/join' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      try {
-        const data = JSON.parse(body || '{}');
-        const entry = QueueEngine.joinQueue(data.rankId || 'CBD-MAIN-RANK', data.shiftId || 'shift-998');
-        broadcastEvent('QUEUE_UPDATE', entry);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, entry }));
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'INVALID_PAYLOAD' }));
-      }
-    });
-    return;
-  }
-
-  // 9. Depart Rank & Financial Settlement Endpoint (with Alerts)
-  if (req.url === '/api/rank/depart' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      try {
-        const data = JSON.parse(body || '{}');
-        const shiftId = data.shiftId || 'shift-998';
-        const count = data.count || 16;
-        
-        const result = QueueEngine.verifyPassengerCount(data.rankId || 'CBD-MAIN-RANK', shiftId, count);
-
-        if (result.success) {
-          const settlement = FinanceEngine.processDepartureSettlement(shiftId, count);
-          broadcastEvent('DEPARTURE_UPDATE', { entry: result.entry, settlement });
-
-          AlertEngine.sendDepartureAlert('+263771234567', shiftId, settlement.grossFare, settlement.ownerNetPayout);
-        }
-
-        res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(result));
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'INVALID_PAYLOAD' }));
-      }
-    });
-    return;
-  }
-
-  // 10. Close Shift Endpoint
-  if (req.url === '/api/shift/close' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      try {
-        const data = JSON.parse(body || '{}');
-        const shiftId = data.shiftId || 'shift-998';
-        const summary = ShiftEngine.closeShift(shiftId);
-
-        broadcastEvent('SHIFT_CLOSED', summary);
-
-        AlertEngine.sendShiftClosedAlert('+263771234567', shiftId, summary.financials.totalGross, summary.financials.totalOwnerPayout);
+        const token = TokenEngine.issueChangeToken(shiftId, changeAmount);
+        broadcastEvent('CHANGE_TOKEN_ISSUED', { token });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, summary }));
-      } catch {
+        res.end(JSON.stringify({ success: true, token }));
+      } catch (err: any) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'INVALID_PAYLOAD' }));
+        res.end(JSON.stringify({ success: false, error: err.message }));
       }
     });
     return;
   }
 
-  // 11. Fleet Dashboard View (Updated with Live Pickup Requests)
-  if (req.url === '/' || req.url === '/index.html') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8">
-        <title>MUSHIKASHIKA Fleet Terminal</title>
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        <style>
-          body { font-family: system-ui, sans-serif; margin: 24px; background: #f1f5f9; color: #0f172a; }
-          h1 { color: #0284c7; margin-bottom: 20px; }
-          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 20px; }
-          .card { background: white; padding: 18px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-          h2 { margin-top: 0; font-size: 1.1rem; color: #334155; }
-          button { background: #0284c7; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-right: 6px; margin-bottom: 6px; }
-          button.danger { background: #ef4444; }
-          button.warning { background: #d97706; }
-          button.success { background: #16a34a; }
-          button:hover { opacity: 0.9; }
-          #map { height: 320px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-          pre { background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 6px; font-size: 0.85rem; height: 160px; overflow-y: auto; }
-          .lift-badge { background: #e0f2fe; color: #0369a1; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
-        </style>
-      </head>
-      <body>
-        <h1>MUSHIKASHIKA FLEET TERMINAL (BULAWAYO LIVE MAP)</h1>
-        <div id="map"></div>
-
-        <div class="grid">
-          <div class="card">
-            <h2>Driver Shift Status</h2>
-            <p>Shift: <strong id="shiftId">Loading...</strong></p>
-            <p>Status: <strong id="shiftState">ACTIVE</strong></p>
-            <p>Trust Score: <strong id="trustScore" style="color:#16a34a;">85</strong> / 100</p>
-            <p>GPS: <span id="telemetry">None</span></p>
-          </div>
-          <div class="card">
-            <h2>Rank & Lift Demand</h2>
-            <p>Rank Position: <strong id="queuePos">Not in Queue</strong></p>
-            <p>Street Pickup Requests: <span class="lift-badge" id="liftCount">0 Pending</span></p>
-            <p>Digital Boarded: <strong id="passengerCount" style="color:#0284c7;">0 Passengers</strong></p>
-          </div>
-          <div class="card">
-            <h2>Financial Settlement Ledger</h2>
-            <p>Gross Fare Earned: <strong id="grossFare">$0.00</strong></p>
-            <p>Owner Net Payout: <strong id="ownerPayout">$0.00</strong></p>
-            <p>Driver Commission: <span id="driverCut">$0.00</span></p>
-          </div>
-          <div class="card">
-            <h2>Control Actions</h2>
-            <button class="success" onclick="requestTestLift()">Simulate Street Pickup Request</button>
-            <button onclick="sendGps()">Send Normal GPS</button>
-            <button class="warning" onclick="simulateHighSpeed()">Simulate Spoofing (140 km/h)</button>
-            <button onclick="joinQueue()">Join Rank Queue</button>
-            <button onclick="verifyRank()">Marshal Clearance (Auth)</button>
-            <button onclick="departRank()">Verify & Depart</button>
-            <button class="danger" onclick="closeShift()">End Shift & Reconcile</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <h2>System Real-Time Log</h2>
-          <pre id="logs">Connecting to SSE Event Engine...</pre>
-        </div>
-
-        <script>
-          let authToken = '';
-          let map, vehicleMarker;
-          let liftMarkers = [];
-
-          function initMap() {
-            map = L.map('map').setView([-20.1500, 28.5830], 13);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-              maxZoom: 19,
-              attribution: '© OpenStreetMap'
-            }).addTo(map);
-
-            vehicleMarker = L.marker([-20.1585, 28.6028]).addTo(map)
-              .bindPopup('<b>Mushikashika #998</b><br>Ascot Corridor')
-              .openPopup();
-          }
-
-          async function initAuth() {
-            const res = await fetch('/api/auth/demo-tokens');
-            const data = await res.json();
-            authToken = data.marshalToken;
-            log('[AUTH] Demo JWT session acquired.');
-          }
-
-          async function fetchStatus() {
-            const res = await fetch('/api/shift/status');
-            const data = await res.json();
-            document.getElementById('shiftId').innerText = data.shift.status !== 'NO_ACTIVE_SHIFT' ? 'shift-998' : 'None';
-            document.getElementById('shiftState').innerText = data.shift.status || 'OFFLINE';
-            document.getElementById('trustScore').innerText = data.trustScore;
-
-            if (data.pendingLifts) {
-              document.getElementById('liftCount').innerText = data.pendingLifts.length + ' Pending';
-            }
-            
-            if (data.passengerCount !== undefined) {
-              document.getElementById('passengerCount').innerText = data.passengerCount + ' Passengers';
-            }
-            if (data.latestGeo) {
-              updateTelemetryUI(data.latestGeo);
-            }
-            const activeEntry = data.rankQueue.find(q => q.shiftId === 'shift-998');
-            if (activeEntry) {
-              document.getElementById('queuePos').innerText = '#' + activeEntry.position;
-            } else {
-              document.getElementById('queuePos').innerText = 'Not in Queue';
-            }
-            if (data.financials) {
-              document.getElementById('grossFare').innerText = '$' + data.financials.totalGross.toFixed(2);
-              document.getElementById('ownerPayout').innerText = '$' + data.financials.totalOwnerPayout.toFixed(2);
-              document.getElementById('driverCut').innerText = '$' + data.financials.totalDriverCommission.toFixed(2);
-            }
-          }
-
-          function updateTelemetryUI(point) {
-            const text = point.lat + ', ' + point.lng + ' (' + point.speed + ' km/h)';
-            document.getElementById('telemetry').innerText = text;
-            if (vehicleMarker && map) {
-              const newLatLng = new L.LatLng(point.lat, point.lng);
-              vehicleMarker.setLatLng(newLatLng);
-            }
-          }
-
-          async function requestTestLift() {
-            await fetch('/api/lift/request', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({
-                phone: '+263779876543',
-                landmark: 'Ascot Shopping Centre Gate',
-                seats: 2,
-                fare: 1.00,
-                lat: -20.1530,
-                lng: 28.5950
-              })
-            });
-          }
-
-          async function sendGps() {
-            await fetch('/api/telemetry', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ lat: -20.1585, lng: 28.6028, speed: 45 })
-            });
-          }
-
-          async function simulateHighSpeed() {
-            await fetch('/api/telemetry', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ lat: -20.1200, lng: 28.6500, speed: 140 })
-            });
-          }
-
-          async function joinQueue() {
-            await fetch('/api/rank/join', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ rankId: 'CBD-MAIN-RANK', shiftId: 'shift-998' })
-            });
-          }
-
-          async function verifyRank() {
-            await fetch('/api/clearance/verify', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + authToken
-              },
-              body: JSON.stringify({ marshalId: 'marshal-RANK-04' })
-            });
-          }
-
-          async function departRank() {
-            await fetch('/api/rank/depart', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ rankId: 'CBD-MAIN-RANK', shiftId: 'shift-998', count: 16 })
-            });
-          }
-
-          async function closeShift() {
-            await fetch('/api/shift/close', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ shiftId: 'shift-998' })
-            });
-          }
-
-          function log(msg) {
-            const el = document.getElementById('logs');
-            el.innerText = '[' + new Date().toLocaleTimeString() + '] ' + msg + '\\n' + el.innerText;
-          }
-
-          const eventSource = new EventSource('/api/events');
-          eventSource.onopen = () => log('[SSE] Pipeline connected.');
-          eventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.type === 'TELEMETRY_UPDATE') {
-              updateTelemetryUI(data.payload);
-            } else if (data.type === 'LIFT_REQUESTED') {
-              fetchStatus();
-              const lift = data.payload.lift;
-              log('🙋‍♂️ [STREET LIFT REQUEST] Pickup at ' + lift.pickupLandmark + ' (' + lift.passengerCount + ' seat(s) for $' + lift.offeredFare.toFixed(2) + ')');
-              
-              // Place pin on map
-              const marker = L.marker([lift.pickupLat, lift.pickupLng]).addTo(map)
-                .bindPopup('<b>Street Pickup Request</b><br>' + lift.pickupLandmark + '<br>Seats: ' + lift.passengerCount)
-                .openPopup();
-              liftMarkers.push(marker);
-            } else if (data.type === 'ANOMALY_DETECTED') {
-              fetchStatus();
-              log('⚠️ [ANOMALY DETECTED] ' + data.payload.anomaly.description);
-            } else if (data.type === 'CLEARANCE_UPDATE') {
-              fetchStatus();
-              log('[CLEARANCE] HMAC Signature verified.');
-            } else if (data.type === 'QUEUE_UPDATE') {
-              fetchStatus();
-              log('[QUEUE] Vehicle joined rank line.');
-            } else if (data.type === 'DEPARTURE_UPDATE') {
-              fetchStatus();
-              log('[FINANCE] Trip settled & WhatsApp Alert Dispatched.');
-            } else if (data.type === 'SHIFT_CLOSED') {
-              fetchStatus();
-              log('[EOD AUDIT] Shift closed! SMS EOD Summary Dispatched.');
-            } else if (data.type === 'PASSENGER_BOARDED') {
-              fetchStatus();
-              log('[PASSENGER] Seat reserved via ' + data.payload.pass.paymentMethod);
-            }
-          };
-
-          initMap();
-          initAuth();
-          fetchStatus();
-        </script>
-      </body>
-      </html>
-    `);
-    return;
-  }
-
-  res.writeHead(404);
-  res.end('Not Found');
+  // Fallback 404
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'Endpoint Not Found' }));
 });
 
-// Seed Initial Shift State
-mockDb.shifts.set('shift-998', {
-  driverId: 'driver-001',
-  conductorId: 'conductor-002',
-  status: 'ACTIVE',
-  startTime: new Date().toISOString()
-});
-mockDb.trustScores.set('driver-001', 85);
-
+// Start listening
+const PORT = 3000;
 server.listen(PORT, () => {
-  console.log(`\n==================================================`);
-  console.log(` 🚀 BULAWAYO FLEET SERVER LIVE AT: http://localhost:${PORT}`);
-  console.log(` 📱 PASSENGER APP AVAILABLE AT: http://localhost:${PORT}/passenger`);
-  console.log(`==================================================\n`);
-
-  TelemetryEmulator.startSimulation('shift-998', (point) => {
-    mockRedis.set('location:shift-998', JSON.stringify(point));
-    broadcastEvent('TELEMETRY_UPDATE', point);
-  });
+  console.log('==================================================');
+  console.log(`BULAWAYO FLEET SERVER LIVE AT: http://localhost:${PORT}`);
+  console.log(`PASSENGER APP AVAILABLE AT: http://localhost:${PORT}/passenger`);
+  console.log('==================================================');
+  console.log('GPS Telemetry Emulator (Bulawayo Route) started for shift: shift-998');
 });
