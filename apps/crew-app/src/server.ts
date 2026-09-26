@@ -13,6 +13,7 @@ import { OfflineEngine, type OfflineQueueItem } from './offline-engine.ts';
 import { AlertEngine } from './alert-engine.ts';
 import { PassengerEngine } from './passenger-engine.ts';
 import { PASSENGER_VIEW } from './passenger-view.ts';
+import { AnomalyEngine } from './anomaly-engine.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -110,6 +111,13 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 2.4 Anomaly Audit History Endpoint
+  if (req.url === '/api/anomalies' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ anomalies: AnomalyEngine.getActiveAnomalies('shift-998') }));
+    return;
+  }
+
   // 2.5 Offline Queue Sync Endpoint
   if (req.url === '/api/offline/sync' && req.method === 'POST') {
     let body = '';
@@ -162,35 +170,55 @@ const server = http.createServer((req, res) => {
   // 5. Shift Status Endpoint
   if (req.url === '/api/shift/status' && req.method === 'GET') {
     const shift = mockDb.shifts.get('shift-998') || { status: 'NO_ACTIVE_SHIFT' };
-    const trustScore = mockDb.trustScores.get('driver-001') || 80;
+    const trustScore = mockDb.trustScores.get('driver-001') || 85;
     const geo = mockRedis.get('location:shift-998');
     const rankQueue = QueueEngine.getQueueStatus('CBD-MAIN-RANK');
     const financials = FinanceEngine.getShiftFinancials('shift-998');
     const passengerCount = PassengerEngine.getBoardedCount('shift-998');
+    const anomalies = AnomalyEngine.getActiveAnomalies('shift-998');
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null, rankQueue, financials, passengerCount }));
+    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null, rankQueue, financials, passengerCount, anomalies }));
     return;
   }
 
-  // 6. Telemetry Ingress Endpoint
+  // 6. Telemetry Ingress Endpoint (with Anomaly Inspection)
   if (req.url === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
         const payload = JSON.parse(body || '{}');
+        const shiftId = payload.shiftId || 'shift-998';
+        const lat = payload.lat || -20.1585;
+        const lng = payload.lng || 28.6028;
+        const speed = payload.speed || 45;
+
         const point = {
-          shiftId: payload.shiftId || 'shift-998',
-          lat: payload.lat || -20.1585,
-          lng: payload.lng || 28.6028,
-          speed: payload.speed || 45,
+          shiftId,
+          lat,
+          lng,
+          speed,
           timestamp: new Date().toISOString()
         };
         mockRedis.set(`location:${point.shiftId}`, JSON.stringify(point));
         broadcastEvent('TELEMETRY_UPDATE', point);
+
+        // Run Anomaly Inspection
+        const shift = mockDb.shifts.get(shiftId);
+        const hasClearance = shift ? shift.status === 'DEPARTED' : false;
+        const anomaly = AnomalyEngine.inspectTelemetry(shiftId, lat, lng, speed, hasClearance);
+
+        if (anomaly) {
+          const currentTrust = mockDb.trustScores.get('driver-001') || 85;
+          const newTrust = Math.max(0, currentTrust - anomaly.deductedTrust);
+          mockDb.trustScores.set('driver-001', newTrust);
+
+          broadcastEvent('ANOMALY_DETECTED', { anomaly, newTrust });
+        }
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'TELEMETRY_UPDATED', point }));
+        res.end(JSON.stringify({ status: 'TELEMETRY_UPDATED', point, anomalyDetected: !!anomaly }));
       } catch {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'INVALID_JSON' }));
@@ -221,6 +249,11 @@ const server = http.createServer((req, res) => {
         const signature = TrustEngine.generateSignature({ shiftId, marshalId, timestamp });
 
         const result = TrustEngine.processClearance({ shiftId, marshalId, timestamp, signature });
+        
+        // Mark shift as cleared in DB
+        const shift = mockDb.shifts.get(shiftId);
+        if (shift) shift.status = 'DEPARTED';
+
         broadcastEvent('CLEARANCE_UPDATE', result);
 
         res.writeHead(result.success ? 200 : 401, { 'Content-Type': 'application/json' });
@@ -326,7 +359,8 @@ const server = http.createServer((req, res) => {
           h2 { margin-top: 0; font-size: 1.1rem; color: #334155; }
           button { background: #0284c7; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-right: 6px; margin-bottom: 6px; }
           button.danger { background: #ef4444; }
-          button:hover { background: #0369a1; }
+          button.warning { background: #d97706; }
+          button:hover { opacity: 0.9; }
           #map { height: 320px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
           pre { background: #0f172a; color: #38bdf8; padding: 12px; border-radius: 6px; font-size: 0.85rem; height: 160px; overflow-y: auto; }
         </style>
@@ -340,7 +374,7 @@ const server = http.createServer((req, res) => {
             <h2>Driver Shift Status</h2>
             <p>Shift: <strong id="shiftId">Loading...</strong></p>
             <p>Status: <strong id="shiftState">ACTIVE</strong></p>
-            <p>Trust Score: <strong id="trustScore">Loading...</strong> / 100</p>
+            <p>Trust Score: <strong id="trustScore" style="color:#16a34a;">85</strong> / 100</p>
             <p>GPS: <span id="telemetry">None</span></p>
           </div>
           <div class="card">
@@ -357,7 +391,8 @@ const server = http.createServer((req, res) => {
           </div>
           <div class="card">
             <h2>Control Actions</h2>
-            <button onclick="sendGps()">Send Manual GPS</button>
+            <button onclick="sendGps()">Send Normal GPS</button>
+            <button class="warning" onclick="simulateHighSpeed()">Simulate Spoofing (140 km/h)</button>
             <button onclick="joinQueue()">Join Rank Queue</button>
             <button onclick="verifyRank()">Marshal Clearance (Auth)</button>
             <button onclick="departRank()">Verify & Depart</button>
@@ -399,6 +434,13 @@ const server = http.createServer((req, res) => {
             document.getElementById('shiftId').innerText = data.shift.status !== 'NO_ACTIVE_SHIFT' ? 'shift-998' : 'None';
             document.getElementById('shiftState').innerText = data.shift.status || 'OFFLINE';
             document.getElementById('trustScore').innerText = data.trustScore;
+            
+            if (data.trustScore < 70) {
+              document.getElementById('trustScore').style.color = '#dc2626';
+            } else if (data.trustScore < 85) {
+              document.getElementById('trustScore').style.color = '#d97706';
+            }
+
             if (data.passengerCount !== undefined) {
               document.getElementById('passengerCount').innerText = data.passengerCount + ' Passengers';
             }
@@ -434,7 +476,15 @@ const server = http.createServer((req, res) => {
             await fetch('/api/telemetry', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ lat: -20.1585, lng: 28.6028, speed: Math.floor(Math.random() * 30) + 30 })
+              body: JSON.stringify({ lat: -20.1585, lng: 28.6028, speed: 45 })
+            });
+          }
+
+          async function simulateHighSpeed() {
+            await fetch('/api/telemetry', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ lat: -20.1200, lng: 28.6500, speed: 140 })
             });
           }
 
@@ -485,6 +535,9 @@ const server = http.createServer((req, res) => {
             if (data.type === 'TELEMETRY_UPDATE') {
               updateTelemetryUI(data.payload);
               log('[MAP UPDATE] Vehicle moving: ' + data.payload.lat + ', ' + data.payload.lng);
+            } else if (data.type === 'ANOMALY_DETECTED') {
+              fetchStatus();
+              log('⚠️ [ANOMALY DETECTED] ' + data.payload.anomaly.description + ' (Trust Penalty: -' + data.payload.anomaly.deductedTrust + ')');
             } else if (data.type === 'CLEARANCE_UPDATE') {
               fetchStatus();
               log('[CLEARANCE] HMAC Signature verified.');
