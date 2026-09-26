@@ -11,6 +11,8 @@ import { TelemetryEmulator } from './telemetry-emulator.ts';
 import { ExportEngine } from './export-engine.ts';
 import { OfflineEngine, type OfflineQueueItem } from './offline-engine.ts';
 import { AlertEngine } from './alert-engine.ts';
+import { PassengerEngine } from './passenger-engine.ts';
+import { PASSENGER_VIEW } from './passenger-view.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
@@ -43,7 +45,13 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 1. Dedicated Role Views
+  // 1. Dedicated Role Views & Passenger Web App
+  if (req.url === '/passenger') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(PASSENGER_VIEW);
+    return;
+  }
+
   if (req.url === '/marshal') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(MARSHAL_VIEW);
@@ -71,6 +79,34 @@ const server = http.createServer((req, res) => {
   if (req.url === '/api/alerts/history' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ alerts: AlertEngine.getAlertHistory() }));
+    return;
+  }
+
+  // 2.3 Passenger Self-Boarding API Endpoint
+  if (req.url === '/api/passenger/board' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        const pass = PassengerEngine.issuePass(
+          data.shiftId || 'shift-998',
+          data.rankId || 'CBD-MAIN-RANK',
+          data.method || 'ECOCASH'
+        );
+
+        broadcastEvent('PASSENGER_BOARDED', {
+          pass,
+          count: PassengerEngine.getBoardedCount(data.shiftId || 'shift-998')
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, pass }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
     return;
   }
 
@@ -130,9 +166,10 @@ const server = http.createServer((req, res) => {
     const geo = mockRedis.get('location:shift-998');
     const rankQueue = QueueEngine.getQueueStatus('CBD-MAIN-RANK');
     const financials = FinanceEngine.getShiftFinancials('shift-998');
+    const passengerCount = PassengerEngine.getBoardedCount('shift-998');
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null, rankQueue, financials }));
+    res.end(JSON.stringify({ shift, trustScore, latestGeo: geo ? JSON.parse(geo) : null, rankQueue, financials, passengerCount }));
     return;
   }
 
@@ -310,6 +347,7 @@ const server = http.createServer((req, res) => {
             <h2>Rank Queue Status</h2>
             <p>Rank Position: <strong id="queuePos">Not in Queue</strong></p>
             <p>Queue Status: <span id="queueStatus">Idle</span></p>
+            <p>Digital Boarded: <strong id="passengerCount" style="color:#0284c7;">0 Passengers</strong></p>
           </div>
           <div class="card">
             <h2>Financial Settlement Ledger</h2>
@@ -361,6 +399,9 @@ const server = http.createServer((req, res) => {
             document.getElementById('shiftId').innerText = data.shift.status !== 'NO_ACTIVE_SHIFT' ? 'shift-998' : 'None';
             document.getElementById('shiftState').innerText = data.shift.status || 'OFFLINE';
             document.getElementById('trustScore').innerText = data.trustScore;
+            if (data.passengerCount !== undefined) {
+              document.getElementById('passengerCount').innerText = data.passengerCount + ' Passengers';
+            }
             if (data.latestGeo) {
               updateTelemetryUI(data.latestGeo);
             }
@@ -456,6 +497,9 @@ const server = http.createServer((req, res) => {
             } else if (data.type === 'SHIFT_CLOSED') {
               fetchStatus();
               log('[EOD AUDIT] Shift closed! SMS EOD Summary Dispatched to Owner.');
+            } else if (data.type === 'PASSENGER_BOARDED') {
+              fetchStatus();
+              log('[PASSENGER] Seat #' + data.payload.pass.seatNumber + ' reserved & paid via ' + data.payload.pass.paymentMethod);
             }
           };
 
@@ -485,6 +529,7 @@ mockDb.trustScores.set('driver-001', 85);
 server.listen(PORT, () => {
   console.log(`\n==================================================`);
   console.log(` 🚀 BULAWAYO FLEET SERVER LIVE AT: http://localhost:${PORT}`);
+  console.log(` 📱 PASSENGER APP AVAILABLE AT: http://localhost:${PORT}/passenger`);
   console.log(`==================================================\n`);
 
   TelemetryEmulator.startSimulation('shift-998', (point) => {
