@@ -21,6 +21,10 @@ const sseClients: Set<ServerResponse> = new Set();
 function broadcastEvent(type: string, payload: object) {
   const eventData = `data: ${JSON.stringify({ type, payload })}\n\n`;
   for (const client of sseClients) {
+    if (client.destroyed || client.writableEnded) {
+      sseClients.delete(client);
+      continue;
+    }
     try {
       client.write(eventData);
     } catch {
@@ -31,8 +35,8 @@ function broadcastEvent(type: string, payload: object) {
 
 const server = http.createServer((req, res) => {
   // Catch request/response level socket errors to avoid unhandled crashes
-  req.on('error', (err) => console.error('Request Error:', err));
-  res.on('error', (err) => console.error('Response Error:', err));
+  req.on('error', () => {});
+  res.on('error', () => {});
 
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -217,15 +221,28 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 6. SSE Stream Endpoint
+  // 6. SSE Stream Endpoint (Clean disconnect handlers added)
   if (pathname === '/api/events' && req.method === 'GET') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive'
     });
+
     sseClients.add(res);
-    req.on('close', () => sseClients.delete(res));
+
+    req.on('close', () => {
+      sseClients.delete(res);
+    });
+
+    req.on('error', () => {
+      sseClients.delete(res);
+    });
+
+    res.on('error', () => {
+      sseClients.delete(res);
+    });
+
     return;
   }
 
