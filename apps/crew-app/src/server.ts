@@ -2,21 +2,21 @@
 import express, { Request, Response, NextFunction } from 'express';
 import http from 'node:http';
 import cors from 'cors';
-import { mockDb, mockRedis } from '../../../shared/database/emulator';
-import { TrustEngine } from './trust-engine';
-import { QueueEngine } from './queue-engine';
-import { FinanceEngine } from './finance-engine';
-import { ShiftEngine } from './shift-engine';
-import { AuthEngine } from './auth-engine';
-import { MARSHAL_VIEW, OWNER_VIEW } from './router-views';
-import { TelemetryEmulator } from './telemetry-emulator';
-import { ExportEngine } from './export-engine';
-import { AlertEngine } from './alert-engine';
-import { PassengerEngine } from './passenger-engine';
-import { PASSENGER_VIEW } from './passenger-view';
-import { AnomalyEngine } from './anomaly-engine';
-import { LiftEngine } from './lift-engine';
-import { MushikashikaTerminalEngine } from './mushikashika-terminal';
+import { mockDb, mockRedis } from '../../../shared/database/emulator.js';
+import { TrustEngine } from './trust-engine.js';
+import { QueueEngine } from './queue-engine.js';
+import { FinanceEngine } from './finance-engine.js';
+import { ShiftEngine } from './shift-engine.js';
+import { AuthEngine } from './auth-engine.js';
+import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.js';
+import { TelemetryEmulator } from './telemetry-emulator.js';
+import { ExportEngine } from './export-engine.js';
+import { AlertEngine } from './alert-engine.js';
+import { PassengerEngine } from './passenger-engine.js';
+import { PASSENGER_VIEW } from './passenger-view.js';
+import { AnomalyEngine } from './anomaly-engine.js';
+import { LiftEngine } from './lift-engine.js';
+import { MushikashikaTerminalEngine } from './mushikashika-terminal.js';
 
 const PORT = 3000;
 const app = express();
@@ -527,7 +527,7 @@ app.get(['/', '/index.html'], (_req: Request, res: Response) => {
           map = L.map('map').setView([-20.1500, 28.5830], 13);
           L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
-            attribution: '© OpenStreetMap'
+            attribution: '©️ OpenStreetMap'
           }).addTo(map);
 
           vehicleMarker = L.marker([-20.1585, 28.6028]).addTo(map)
