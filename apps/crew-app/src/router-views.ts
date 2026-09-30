@@ -89,15 +89,18 @@ export const OWNER_VIEW = `
     .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .card label { font-size: 0.9rem; color: #64748b; font-weight: 500; display: block; margin-bottom: 8px; }
     .card .val { font-size: 2.2rem; font-weight: 700; color: #15803d; }
+    .card .val.sub { font-size: 1.8rem; color: #0369a1; }
+    .card .val.rank { font-size: 1.8rem; color: #b45309; }
     .btn-csv {
       background: #16a34a; color: white; border: none; padding: 12px 20px; border-radius: 8px;
       font-weight: 600; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
     }
     .btn-csv:hover { background: #15803d; }
+    .status-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; background: #dcfce7; color: #15803d; margin-left: 12px; }
   </style>
 </head>
 <body>
-  <h1>📊 FLEET OWNER FINANCIAL DASHBOARD</h1>
+  <h1>📊 FLEET OWNER FINANCIAL DASHBOARD <span class="status-badge" id="liveIndicator">LIVE SYNC</span></h1>
   
   <div class="grid">
     <div class="card">
@@ -106,11 +109,15 @@ export const OWNER_VIEW = `
     </div>
     <div class="card">
       <label>Total Gross Revenue</label>
-      <div class="val" id="gross">$0.00</div>
+      <div class="val sub" id="gross">$0.00</div>
     </div>
     <div class="card">
       <label>Driver Commissions Paid</label>
-      <div class="val" id="driverCut">$0.00</div>
+      <div class="val sub" id="driverCut">$0.00</div>
+    </div>
+    <div class="card">
+      <label>Rank & Marshal Fees</label>
+      <div class="val rank" id="rankFees">$0.00</div>
     </div>
   </div>
 
@@ -119,22 +126,58 @@ export const OWNER_VIEW = `
   </a>
 
   <script>
+    function updateDOM(financials) {
+      if (!financials) return;
+      
+      const ownerPayout = financials.totalOwnerPayout !== undefined ? financials.totalOwnerPayout : financials.ownerNetPayout || 0;
+      const totalGross = financials.totalGross !== undefined ? financials.totalGross : financials.grossFare || 0;
+      const driverCut = financials.totalDriverCommission !== undefined ? financials.totalDriverCommission : financials.driverCommission || 0;
+      const rankFees = financials.totalRankFees !== undefined ? financials.totalRankFees : financials.rankFee || 0;
+
+      document.getElementById('ownerNet').innerText = '$' + Number(ownerPayout).toFixed(2);
+      document.getElementById('gross').innerText = '$' + Number(totalGross).toFixed(2);
+      document.getElementById('driverCut').innerText = '$' + Number(driverCut).toFixed(2);
+      document.getElementById('rankFees').innerText = '$' + Number(rankFees).toFixed(2);
+    }
+
     async function loadStats() {
       try {
-        const res = await fetch('/api/shift/status');
+        const res = await fetch('/api/owner/financials');
         const data = await res.json();
-        if (data.financials) {
-          document.getElementById('ownerNet').innerText = '$' + data.financials.totalOwnerPayout.toFixed(2);
-          document.getElementById('gross').innerText = '$' + data.financials.totalGross.toFixed(2);
-          document.getElementById('driverCut').innerText = '$' + data.financials.totalDriverCommission.toFixed(2);
+        if (data.success && data.summary) {
+          updateDOM(data.summary);
+        } else {
+          // Fallback to shift status if aggregate route is pending
+          const fallbackRes = await fetch('/api/shift/status');
+          const fallbackData = await fallbackRes.json();
+          if (fallbackData.financials) {
+            updateDOM(fallbackData.financials);
+          }
         }
       } catch (err) {
-        console.error('Failed to load financial metrics:', err);
+        console.error('Failed to load owner financial metrics:', err);
       }
     }
 
-    // Connect to Server-Sent Events stream for instant updates
+    // Connect to Server-Sent Events stream for instant realtime push updates
     const eventSource = new EventSource('/api/events');
+
+    eventSource.addEventListener('OWNER_FINANCIAL_UPDATE', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.payload && data.payload.cumulative) {
+          updateDOM(data.payload.cumulative);
+        } else {
+          loadStats();
+        }
+      } catch (err) {
+        loadStats();
+      }
+    });
+
+    eventSource.addEventListener('DEPARTURE_UPDATE', () => loadStats());
+    eventSource.addEventListener('SHIFT_CLOSED', () => loadStats());
+
     eventSource.onmessage = () => loadStats();
 
     // Initial load on page mount
