@@ -1,0 +1,53 @@
+import request from 'supertest';
+// Simple assertions for node execution
+import assert from 'assert';
+
+async function runTests() {
+  console.log('🧪 Starting End-to-End System Tests...');
+
+  // Test 1: Fetch Demo Token
+  const tokenRes = await fetch('http://localhost:3000/api/auth/demo-tokens');
+  const tokenData = await tokenRes.json();
+  assert(tokenData.marshalToken, 'Failed to fetch marshal token');
+  console.log('✅ Auth Token Generation Passed');
+
+  // Test 2: Issue HMAC Clearance with Token
+  const verifyRes = await fetch('http://localhost:3000/api/clearance/verify', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${tokenData.marshalToken}`
+    },
+    body: JSON.stringify({ shiftId: 'shift-998' })
+  });
+  const verifyData = await verifyRes.json();
+  assert.strictEqual(verifyData.success, true);
+  assert(verifyData.hmacSignature, 'HMAC signature missing');
+  console.log('✅ HMAC Clearance Middleware Passed');
+
+  // Test 3: Authorize Departure (16 passengers @ $1.50 = $24.00 Gross)
+  // Driver 20% ($4.80), Rank 10% ($2.40), Owner Net ($16.80)
+  const departRes = await fetch('http://localhost:3000/api/rank/depart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shiftId: 'shift-998', count: 16 })
+  });
+  const departData = await departRes.json();
+  assert.strictEqual(departData.shift.grossFare, 24);
+  assert.strictEqual(departData.shift.ownerNetPayout, 16.8);
+  console.log('✅ Departure Calculation & Settlement Passed');
+
+  // Test 4: Financial Aggregates
+  const finRes = await fetch('http://localhost:3000/api/owner/financials');
+  const finData = await finRes.json();
+  assert.strictEqual(finData.summary.totalGross, 24);
+  assert.strictEqual(finData.summary.totalOwnerPayout, 16.8);
+  console.log('✅ Owner Financial Reporting Passed');
+
+  console.log('🎉 All 4 core modules verified successfully!');
+}
+
+// Execute tests if server is active
+runTests().catch((err) => {
+  console.error('❌ Test execution failed:', err.message);
+});
