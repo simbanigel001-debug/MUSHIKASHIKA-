@@ -111,6 +111,50 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 2b. Dedicated Owner Financial Synchronization Endpoint
+  if (pathname === '/api/owner/financials' && req.method === 'GET') {
+    try {
+      const activeShifts = Array.from(mockDb.shifts.keys());
+      
+      let totalGross = 0;
+      let totalOwnerPayout = 0;
+      let totalDriverCommission = 0;
+      let totalRankFees = 0;
+      const shiftSummaries = [];
+
+      for (const sId of activeShifts) {
+        const financials = FinanceEngine.getShiftFinancials(sId);
+        totalGross += financials.totalGross || 0;
+        totalOwnerPayout += financials.totalOwnerPayout || 0;
+        totalDriverCommission += financials.totalDriverCommission || 0;
+        totalRankFees += financials.totalRankFees || 0;
+
+        shiftSummaries.push({
+          shiftId: sId,
+          status: mockDb.shifts.get(sId)?.status,
+          financials
+        });
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        summary: {
+          totalGross,
+          totalOwnerPayout,
+          totalDriverCommission,
+          totalRankFees,
+          activeShiftCount: activeShifts.length
+        },
+        shifts: shiftSummaries
+      }));
+    } catch (err: any) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+    return;
+  }
+
   // 3. Lift Request Endpoints (Street Pickups)
   if (pathname === '/api/lift/request' && req.method === 'POST') {
     let body = '';
@@ -441,7 +485,14 @@ const server = http.createServer((req, res) => {
 
         if (result.success) {
           const settlement = FinanceEngine.processDepartureSettlement(shiftId, count);
+          const cumulativeFinancials = FinanceEngine.getShiftFinancials(shiftId);
+
           broadcastEvent('DEPARTURE_UPDATE', { entry: result.entry, settlement });
+          broadcastEvent('OWNER_FINANCIAL_UPDATE', {
+            shiftId,
+            settlement,
+            cumulative: cumulativeFinancials
+          });
 
           AlertEngine.sendDepartureAlert('+263771234567', shiftId, settlement.grossFare, settlement.ownerNetPayout);
         }
@@ -467,6 +518,11 @@ const server = http.createServer((req, res) => {
         const summary = ShiftEngine.closeShift(shiftId);
 
         broadcastEvent('SHIFT_CLOSED', summary);
+        broadcastEvent('OWNER_FINANCIAL_UPDATE', {
+          shiftId,
+          status: 'CLOSED',
+          cumulative: summary.financials
+        });
 
         AlertEngine.sendShiftClosedAlert('+263771234567', shiftId, summary.financials.totalGross, summary.financials.totalOwnerPayout);
 
