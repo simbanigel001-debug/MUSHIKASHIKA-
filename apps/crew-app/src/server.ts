@@ -14,9 +14,11 @@ import { PassengerEngine } from './passenger-engine.ts';
 import { PASSENGER_VIEW } from './passenger-view.ts';
 import { AnomalyEngine } from './anomaly-engine.ts';
 import { LiftEngine } from './lift-engine.ts';
+import { MushikashikaTerminalEngine } from './mushikashika-terminal.ts';
 
 const PORT = 3000;
 const sseClients: Set<ServerResponse> = new Set();
+const sabhukuEngine = new MushikashikaTerminalEngine();
 
 function broadcastEvent(type: string, payload: object) {
   const eventData = `data: ${JSON.stringify({ type, payload })}\n\n`;
@@ -78,6 +80,18 @@ const server = http.createServer((req, res) => {
   if (pathname === '/owner') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(OWNER_VIEW || '<h1>Owner View Unavailable</h1>');
+    return;
+  }
+
+  // 1b. Sabhuku Terminal Text View Endpoint
+  if (pathname === '/terminal/sabhuku' && req.method === 'GET') {
+    const count = Number(parsedUrl.searchParams.get('count')) || 14;
+    const plate = parsedUrl.searchParams.get('plate') || 'AGE-3109';
+    const driverId = parsedUrl.searchParams.get('driverId') || 'DRV-8812';
+
+    const screen = sabhukuEngine.renderSabhukuScreen(plate, count, driverId);
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(screen);
     return;
   }
 
@@ -276,7 +290,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 8. Telemetry Ingress Endpoint
+  // 8. Telemetry Ingress Endpoint & Sabhuku SI 118 Evaluation
   if (pathname === '/api/telemetry' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -298,6 +312,17 @@ const server = http.createServer((req, res) => {
         mockRedis.set(`location:${point.shiftId}`, JSON.stringify(point));
         broadcastEvent('TELEMETRY_UPDATE', point);
 
+        // Process telemetry through Sabhuku speed engine (SI 118 checks)
+        const sabhukuEval = sabhukuEngine.processInTransitTelemetry(
+          {
+            vehicleId: payload.plateNumber || 'AGE-3109',
+            currentSpeedKmH: speed,
+            roadType: payload.roadType || 'SUBURBAN',
+            durationOverSpeedSec: payload.durationOverSpeedSec || 0,
+          },
+          { lat, lng }
+        );
+
         const shift = mockDb.shifts.get(shiftId);
         const hasClearance = shift ? shift.status === 'DEPARTED' : false;
         const anomaly = AnomalyEngine.inspectTelemetry(shiftId, lat, lng, speed, hasClearance);
@@ -311,10 +336,35 @@ const server = http.createServer((req, res) => {
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'TELEMETRY_UPDATED', point, anomalyDetected: !!anomaly }));
+        res.end(JSON.stringify({ status: 'TELEMETRY_UPDATED', point, anomalyDetected: !!anomaly, sabhukuEval }));
       } catch {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'INVALID_JSON' }));
+      }
+    });
+    return;
+  }
+
+  // 8b. Dedicated Sabhuku Dispatch Route
+  if (pathname === '/api/sabhuku/dispatch' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        const result = sabhukuEngine.dispatchVehicle(
+          data.plateNumber || 'AGE-3109',
+          data.passengerCount ?? 14,
+          data.driverId || 'DRV-8812'
+        );
+
+        broadcastEvent('SABHUKU_DISPATCH', result);
+
+        res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, message: 'MALFORMED_DISPATCH_PAYLOAD' }));
       }
     });
     return;
@@ -488,6 +538,7 @@ const server = http.createServer((req, res) => {
             <button class="warning" onclick="simulateHighSpeed()">Simulate Spoofing (140 km/h)</button>
             <button onclick="joinQueue()">Join Rank Queue</button>
             <button onclick="verifyRank()">Marshal Clearance (Auth)</button>
+            <button onclick="dispatchSabhuku()">Sabhuku Dispatch</button>
             <button onclick="departRank()">Verify & Depart</button>
             <button class="danger" onclick="closeShift()">End Shift & Reconcile</button>
           </div>
@@ -611,6 +662,16 @@ const server = http.createServer((req, res) => {
             });
           }
 
+          async function dispatchSabhuku() {
+            const res = await fetch('/api/sabhuku/dispatch', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ plateNumber: 'AGE-3109', passengerCount: 14, driverId: 'DRV-8812' })
+            });
+            const data = await res.json();
+            log('[SABHUKU DISPATCH] ' + (data.success ? 'TOKEN: ' + data.token : 'FAILED: ' + data.message));
+          }
+
           async function departRank() {
             await fetch('/api/rank/depart', {
               method: 'POST',
@@ -665,6 +726,9 @@ const server = http.createServer((req, res) => {
             } else if (data.type === 'PASSENGER_BOARDED') {
               fetchStatus();
               log('[PASSENGER] Seat reserved via ' + data.payload.pass.paymentMethod);
+            } else if (data.type === 'SABHUKU_DISPATCH') {
+              fetchStatus();
+              log('👑 [SABHUKU EVENT] ' + data.payload.message);
             }
           };
 
@@ -696,6 +760,7 @@ server.listen(PORT, () => {
   console.log(` 🚀 BULAWAYO FLEET SERVER LIVE AT: http://localhost:${PORT}`);
   console.log(` 📱 PASSENGER APP AVAILABLE AT: http://localhost:${PORT}/passenger`);
   console.log(` 👮 MARSHAL VIEW AVAILABLE AT: http://localhost:${PORT}/marshal`);
+  console.log(` 👑 SABHUKU TERMINAL AVAILABLE AT: http://localhost:${PORT}/terminal/sabhuku`);
   console.log(` 🏢 OWNER VIEW AVAILABLE AT: http://localhost:${PORT}/owner`);
   console.log(`==================================================\n`);
 
