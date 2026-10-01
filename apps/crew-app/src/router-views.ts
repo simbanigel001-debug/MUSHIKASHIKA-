@@ -1,3 +1,5 @@
+// Keep all your existing views intact (LOGIN_VIEW, CONDUCTOR_VIEW, MARSHAL_VIEW, OWNER_VIEW)...
+
 export const PASSENGER_VIEW = `
 <!DOCTYPE html>
 <html lang="en">
@@ -9,7 +11,6 @@ export const PASSENGER_VIEW = `
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background: #0b0f19; color: #f8fafc; padding: 16px; max-width: 480px; margin: 0 auto; min-height: 100vh; }
     
-    /* Top Greeting & Dynamic Weather Hero */
     .hero-banner {
       height: 180px;
       border-radius: 16px;
@@ -21,12 +22,10 @@ export const PASSENGER_VIEW = `
       flex-direction: column;
       justify-content: flex-end;
       margin-bottom: 12px;
-      position: relative;
     }
     .hero-greeting { font-size: 1.4rem; font-weight: 900; color: #ffffff; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
     .hero-sub { font-size: 0.85rem; color: #cbd5e1; font-weight: 600; }
 
-    /* Zim Pulse Ticker */
     .pulse-card {
       background: #161e2e;
       border: 1px solid #facc15;
@@ -40,20 +39,17 @@ export const PASSENGER_VIEW = `
     .pulse-badge { background: #facc15; color: #0b0f19; font-weight: 900; font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
     .pulse-text { font-size: 0.82rem; color: #e2e8f0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-    /* Booking & Search Card */
     .card { background: #161e2e; padding: 16px; border-radius: 16px; border: 1px solid #1e293b; margin-bottom: 16px; }
     .form-group { margin-bottom: 12px; }
     label { display: block; font-size: 0.75rem; font-weight: 800; color: #94a3b8; margin-bottom: 6px; letter-spacing: 0.5px; }
     select, input { width: 100%; padding: 12px; background: #0b0f19; border: 1px solid #334155; border-radius: 10px; color: #ffffff; font-size: 0.95rem; outline: none; }
 
-    /* Kombi Queue Display */
     .kombi-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
     .reg-badge { background: #1e293b; color: #facc15; padding: 4px 8px; border-radius: 6px; font-weight: 800; font-size: 0.85rem; border: 1px solid #334155; }
     .fare-tag { font-size: 1.25rem; font-weight: 900; color: #4ade80; }
     .progress-bar-container { background: #0b0f19; height: 10px; border-radius: 5px; overflow: hidden; margin: 10px 0; }
     .progress-bar { background: #facc15; height: 100%; width: 71%; border-radius: 5px; }
 
-    /* Buttons & Modal */
     .btn-main { width: 100%; padding: 14px; background: #facc15; color: #0b0f19; border: none; border-radius: 10px; font-size: 1rem; font-weight: 800; cursor: pointer; }
     .btn-report { width: 100%; padding: 10px; background: transparent; color: #ef4444; border: 1px solid #ef4444; border-radius: 8px; font-size: 0.85rem; font-weight: 700; margin-top: 10px; cursor: pointer; }
     
@@ -105,7 +101,6 @@ export const PASSENGER_VIEW = `
     <button class="btn-main" onclick="bookSeat()">Reserve Seat & Pay</button>
   </div>
 
-  <!-- QR Ticket Output -->
   <div id="ticketModal" class="ticket-view" style="display:none;">
     <h3 style="font-size: 1.1rem; font-weight: 900;">DIGITAL BOARDING PASS</h3>
     <div class="qr-box">🏁</div>
@@ -114,7 +109,6 @@ export const PASSENGER_VIEW = `
     <button class="btn-report" onclick="openReportModal()">Report Crew Incident</button>
   </div>
 
-  <!-- Incident Report Modal -->
   <div id="reportModal" class="modal">
     <h3 style="color: #ef4444; font-size: 1rem; margin-bottom: 10px;">Report Crew / Vehicle Incident</h3>
     <div class="form-group">
@@ -146,6 +140,79 @@ export const PASSENGER_VIEW = `
       document.getElementById('reportModal').style.display = 'none';
     }
   </script>
+</body>
+</html>
+`;
+
+export const ENFORCEMENT_VIEW = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZRP & Municipal Traffic Control</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #090d16; color: #f8fafc; padding: 20px; max-width: 800px; margin: 0 auto; }
+    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e293b; padding-bottom: 12px; margin-bottom: 20px; }
+    .badge-police { background: #3b82f6; color: #ffffff; padding: 4px 10px; border-radius: 6px; font-weight: 800; font-size: 0.8rem; }
+    .alert-card { background: #1e1b4b; border: 1px solid #6366f1; padding: 16px; border-radius: 12px; margin-bottom: 20px; }
+    .table-card { background: #111827; border-radius: 12px; border: 1px solid #1f2937; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem; }
+    th { background: #1f2937; color: #9ca3af; padding: 12px; font-size: 0.75rem; text-transform: uppercase; }
+    td { padding: 12px; border-bottom: 1px solid #1f2937; }
+    .status-alert { color: #ef4444; font-weight: 800; }
+    .status-ok { color: #10b981; font-weight: 800; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h2 style="font-size: 1.2rem; font-weight: 900;">ZRP HIGHWAY PATROL & REGULATORY CONSOLE</h2>
+      <span style="font-size: 0.8rem; color: #6b7280;">Sector: Harare Central / Samora Machel Corridor</span>
+    </div>
+    <span class="badge-police">ENFORCEMENT LIVE</span>
+  </div>
+
+  <div class="alert-card">
+    <h3 style="color: #818cf8; font-size: 0.95rem; margin-bottom: 6px;">⚡ LIVE TELEMETRY SPEEDING ALERTS</h3>
+    <p style="font-size: 0.85rem; color: #c7d2fe;">
+      <strong>CRITICAL: Vehicle ABJ 4920</strong> logged at <strong>82 km/h</strong> in a 60 km/h zone along Jason Moyo Ave. Rank Clearance auto-locked.
+    </p>
+  </div>
+
+  <div class="table-card">
+    <table>
+      <thead>
+        <tr>
+          <th>Vehicle VRN</th>
+          <th>Type</th>
+          <th>Operator Permit</th>
+          <th>VID Status</th>
+          <th>Speed (Live)</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="font-weight: 800; color: #facc15;">ABJ 4920</td>
+          <td>Toyota Hiace</td>
+          <td>Valid (City Council)</td>
+          <td><span class="status-ok">VALID</span></td>
+          <td><span class="status-alert">82 km/h (EXCEEDED)</span></td>
+          <td><button style="background: #ef4444; color: #fff; border: none; padding: 6px 10px; border-radius: 6px; font-weight: 700; cursor: pointer;">Flag Route Block</button></td>
+        </tr>
+        <tr>
+          <td style="font-weight: 800; color: #facc15;">AEY 1102</td>
+          <td>Nissan Caravan</td>
+          <td>Expired</td>
+          <td><span class="status-alert">EXPIRED</span></td>
+          <td><span class="status-ok">48 km/h</span></td>
+          <td><button style="background: #374151; color: #9ca3af; border: none; padding: 6px 10px; border-radius: 6px; font-weight: 700;">Inspect Vehicle</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
 </body>
 </html>
 `;
