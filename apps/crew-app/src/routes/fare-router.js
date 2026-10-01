@@ -1,67 +1,45 @@
-import { Router } from 'express';
+// apps/crew-app/src/router-views.ts
 
-const router = Router();
+export const PASSENGER_VIEW = `
+  <!DOCTYPE html>
+  <html>
+    <head><title>Passenger View</title></head>
+    <body style="font-family: sans-serif; padding: 20px; background: #0f172a; color: #fff;">
+      <h1>Passenger Terminal</h1>
+      <p>Scan QR or pay fare via EcoCash/InnBucks</p>
+    </body>
+  </html>
+`;
 
-/**
- * @route   POST /api/v1/payments/process-fare
- * @desc    Process passenger fare payment & ZIMRA presumptive tax split
- * @access  Public / App
- */
-router.post('/process-fare', async (req, res) => {
-  try {
-    const { 
-      passengerPhone = '+263770000000', 
-      amountUSD = 1.50, 
-      vehicleVRN = 'AGE-3109', 
-      paymentMethod = 'MOBILE_MONEY' 
-    } = req.body;
+export const ENFORCEMENT_VIEW = `
+  <!DOCTYPE html>
+  <html>
+    <head><title>Enforcement View</title></head>
+    <body style="font-family: sans-serif; padding: 20px; background: #0f172a; color: #fff;">
+      <h1>Enforcement Console</h1>
+      <p>Verify Rank Clearances & Digital Passes</p>
+    </body>
+  </html>
+`;
 
-    const grossFare = Number(amountUSD) || 0;
+export const MARSHAL_VIEW = `
+  <!DOCTYPE html>
+  <html>
+    <head><title>Marshal View</title></head>
+    <body style="font-family: sans-serif; padding: 20px; background: #0f172a; color: #fff;">
+      <h1>Rank Marshal Terminal</h1>
+      <p>Manage Queue & Issue Digital Departure Stamps</p>
+    </body>
+  </html>
+`;
 
-    // 1. Mobile Money Push Execution (EcoCash / InnBucks / O'mari)
-    const paymentResponse = {
-      success: true,
-      transactionId: `TXN-${Math.floor(100000 + Math.random() * 900000)}`,
-      paymentMethod,
-      status: 'STK_PUSH_SENT',
-      message: `Prompt sent to ${passengerPhone} for $${grossFare.toFixed(2)} USD`
-    };
-
-    // 2. Automated ZIMRA Presumptive Tax Calculation (3% withholding)
-    const presumptiveTaxUSD = Number((grossFare * 0.03).toFixed(2));
-    const netOperatorRevenue = Number((grossFare - presumptiveTaxUSD).toFixed(2));
-
-    // 3. Fiscal Data Management System (FDMS) Payload
-    const zimraFiscalData = {
-      deviceID: "FDMS-HARARE-0891",
-      vrn: vehicleVRN,
-      grossAmount: grossFare,
-      taxWithheld: presumptiveTaxUSD,
-      currency: "USD",
-      timestamp: new Date().toISOString()
-    };
-
-    // 4. Return Transaction Ledger
-    return res.status(200).json({
-      success: true,
-      payment: paymentResponse,
-      taxSplit: {
-        grossFareUSD: grossFare,
-        zimraPresumptiveTaxUSD: presumptiveTaxUSD,
-        netOperatorUSD: netOperatorRevenue
-      },
-      zimraFDMS: zimraFiscalData,
-      zimraFDMSStatus: "FISCAL_RECEIPT_OPENED",
-      ref: paymentResponse.transactionId
-    });
-
-  } catch (error) {
-    return res.status(500).json({ 
-      success: false, 
-      error: "Payment processing failed", 
-      details: error.message 
-    });
-  }
-});
-
-export default router;
+export const OWNER_VIEW = `
+  <!DOCTYPE html>
+  <html>
+    <head><title>Owner View</title></head>
+    <body style="font-family: sans-serif; padding: 20px; background: #0f172a; color: #fff;">
+      <h1>Vehicle Owner Financial Portal</h1>
+      <p>Live Settlement & Net Payout Ledger</p>
+    </body>
+  </html>
+`;
