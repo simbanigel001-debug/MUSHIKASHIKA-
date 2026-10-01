@@ -1,187 +1,150 @@
-// apps/crew-app/src/router-views.ts
-
-export const MARSHAL_VIEW = `
+export const PASSENGER_VIEW = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Marshal Control Terminal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commuter Terminal - Mushikashika</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 20px; background: #0f172a; color: #f8fafc; }
-    h1 { color: #38bdf8; }
-    .card { background: #1e293b; padding: 20px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #334155; }
-    button { background: #0284c7; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; font-size: 1rem; }
-    button:hover { background: #0369a1; }
-    input { width: 100%; padding: 10px; margin: 8px 0 16px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: white; box-sizing: border-box; }
-    #log { background: #020617; padding: 12px; border-radius: 6px; color: #4ade80; font-family: monospace; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #0b0f19; color: #f8fafc; padding: 16px; max-width: 480px; margin: 0 auto; min-height: 100vh; }
+    
+    /* Top Greeting & Dynamic Weather Hero */
+    .hero-banner {
+      height: 180px;
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(11,15,25,0.2) 0%, rgba(11,15,25,0.95) 100%),
+                  url('https://images.unsplash.com/photo-1519501025264-65ba15a82390?auto=format&fit=crop&w=800&q=80') center/cover no-repeat;
+      border: 1px solid #1e293b;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      margin-bottom: 12px;
+      position: relative;
+    }
+    .hero-greeting { font-size: 1.4rem; font-weight: 900; color: #ffffff; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
+    .hero-sub { font-size: 0.85rem; color: #cbd5e1; font-weight: 600; }
+
+    /* Zim Pulse Ticker */
+    .pulse-card {
+      background: #161e2e;
+      border: 1px solid #facc15;
+      border-radius: 12px;
+      padding: 10px 14px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .pulse-badge { background: #facc15; color: #0b0f19; font-weight: 900; font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
+    .pulse-text { font-size: 0.82rem; color: #e2e8f0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Booking & Search Card */
+    .card { background: #161e2e; padding: 16px; border-radius: 16px; border: 1px solid #1e293b; margin-bottom: 16px; }
+    .form-group { margin-bottom: 12px; }
+    label { display: block; font-size: 0.75rem; font-weight: 800; color: #94a3b8; margin-bottom: 6px; letter-spacing: 0.5px; }
+    select, input { width: 100%; padding: 12px; background: #0b0f19; border: 1px solid #334155; border-radius: 10px; color: #ffffff; font-size: 0.95rem; outline: none; }
+
+    /* Kombi Queue Display */
+    .kombi-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .reg-badge { background: #1e293b; color: #facc15; padding: 4px 8px; border-radius: 6px; font-weight: 800; font-size: 0.85rem; border: 1px solid #334155; }
+    .fare-tag { font-size: 1.25rem; font-weight: 900; color: #4ade80; }
+    .progress-bar-container { background: #0b0f19; height: 10px; border-radius: 5px; overflow: hidden; margin: 10px 0; }
+    .progress-bar { background: #facc15; height: 100%; width: 71%; border-radius: 5px; }
+
+    /* Buttons & Modal */
+    .btn-main { width: 100%; padding: 14px; background: #facc15; color: #0b0f19; border: none; border-radius: 10px; font-size: 1rem; font-weight: 800; cursor: pointer; }
+    .btn-report { width: 100%; padding: 10px; background: transparent; color: #ef4444; border: 1px solid #ef4444; border-radius: 8px; font-size: 0.85rem; font-weight: 700; margin-top: 10px; cursor: pointer; }
+    
+    .modal { display: none; background: #161e2e; padding: 20px; border-radius: 16px; border: 1px solid #334155; margin-top: 16px; }
+    .ticket-view { background: #ffffff; color: #0b0f19; padding: 20px; border-radius: 16px; text-align: center; margin-top: 16px; }
+    .qr-box { width: 130px; height: 130px; background: #0b0f19; margin: 12px auto; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #ffffff; font-size: 2rem; }
   </style>
 </head>
 <body>
-  <h1>👮 MARSHAL CONTROL TERMINAL</h1>
-  <div class="card">
-    <label>Shift ID to Authorize</label>
-    <input type="text" id="targetShift" value="shift-998">
-    <button onclick="authorizeClearance()">Issue HMAC Clearance</button>
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+    <div style="font-size: 1.1rem; font-weight: 900; color: #facc15;">🚌 MUSHIKASHIKA</div>
+    <span style="font-size: 0.8rem; color: #94a3b8; font-weight: 600;">Harare CBD</span>
   </div>
-  <div class="card">
-    <label>Verified Passenger Count</label>
-    <input type="number" id="passCount" value="16">
-    <button onclick="authorizeDeparture()">Authorize Rank Departure</button>
+
+  <div class="hero-banner">
+    <div class="hero-greeting" id="greetingText">Mamuka sei, Tendai!</div>
+    <div class="hero-sub">7°C Harare CBD • Chilly morning on the routes</div>
   </div>
-  <div id="log">Status: Initializing Auth...</div>
+
+  <div class="pulse-card">
+    <span class="pulse-badge">Zim Pulse</span>
+    <div class="pulse-text">Winky D live in Kadoma this weekend! Long distance ranks packing early 🔥</div>
+  </div>
+
+  <div class="card">
+    <div class="form-group">
+      <label>SELECT DESTINATION ROUTE</label>
+      <select id="routeSelect">
+        <option value="chitungwiza">Chitungwiza Unit L ($1.50 USD)</option>
+        <option value="avondale">Avondale / Shopping Centre ($0.50 USD)</option>
+        <option value="msasa">Msasa Industrial ($0.75 USD)</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="kombi-header">
+      <div>
+        <span class="reg-badge">ABJ 4920</span>
+        <span style="font-size: 0.85rem; color: #94a3b8; margin-left: 6px;">Toyota Hiace</span>
+      </div>
+      <div class="fare-tag">$1.50</div>
+    </div>
+    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #cbd5e1;">
+      <span>Queue Status: <strong>Boarding</strong></span>
+      <span><strong>10 / 14</strong> Seats Filled</span>
+    </div>
+    <div class="progress-bar-container"><div class="progress-bar"></div></div>
+    <button class="btn-main" onclick="bookSeat()">Reserve Seat & Pay</button>
+  </div>
+
+  <!-- QR Ticket Output -->
+  <div id="ticketModal" class="ticket-view" style="display:none;">
+    <h3 style="font-size: 1.1rem; font-weight: 900;">DIGITAL BOARDING PASS</h3>
+    <div class="qr-box">🏁</div>
+    <div style="font-weight: 800; font-size: 0.95rem;" id="ticketRef">REF: MSHK-8920-X</div>
+    <div style="font-size: 0.8rem; color: #475569; margin-top: 4px;">Show to Rank Marshal or Conductor</div>
+    <button class="btn-report" onclick="openReportModal()">Report Crew Incident</button>
+  </div>
+
+  <!-- Incident Report Modal -->
+  <div id="reportModal" class="modal">
+    <h3 style="color: #ef4444; font-size: 1rem; margin-bottom: 10px;">Report Crew / Vehicle Incident</h3>
+    <div class="form-group">
+      <label>WHO WAS INVOLVED?</label>
+      <select id="targetCrew">
+        <option value="driver">Driver (Speeding / Misconduct)</option>
+        <option value="conductor">Conductor (Fare Dispute / Overcharge)</option>
+        <option value="marshal">Rank Marshal (Coercion / Delay)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>INCIDENT DETAILS</label>
+      <input type="text" id="reportDetails" placeholder="Describe issue briefly..." />
+    </div>
+    <button class="btn-main" style="background: #ef4444; color: #ffffff;" onclick="submitReport()">Submit Complaint</button>
+  </div>
 
   <script>
-    let token = '';
-    async function init() {
-      const res = await fetch('/api/auth/demo-tokens');
-      const data = await res.json();
-      token = data.marshalToken;
-      document.getElementById('log').innerText = '✅ Marshal JWT Session Active';
+    function bookSeat() {
+      document.getElementById('ticketModal').style.display = 'block';
+      document.getElementById('ticketModal').scrollIntoView({ behavior: 'smooth' });
     }
-
-    async function authorizeClearance() {
-      const shiftId = document.getElementById('targetShift').value;
-      const res = await fetch('/api/clearance/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-        body: JSON.stringify({ shiftId })
-      });
-      const data = await res.json();
-      document.getElementById('log').innerText = '[CLEARANCE] ' + JSON.stringify(data);
+    function openReportModal() {
+      document.getElementById('reportModal').style.display = 'block';
+      document.getElementById('reportModal').scrollIntoView({ behavior: 'smooth' });
     }
-
-    async function authorizeDeparture() {
-      const shiftId = document.getElementById('targetShift').value;
-      const count = Number(document.getElementById('passCount').value);
-      
-      await fetch('/api/rank/join', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rankId: 'CBD-MAIN-RANK', shiftId })
-      });
-
-      const res = await fetch('/api/rank/depart', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rankId: 'CBD-MAIN-RANK', shiftId, count })
-      });
-      const data = await res.json();
-      const gross = data.settlement ? data.settlement.grossFare : (count * 1.50);
-      document.getElementById('log').innerText = '[DEPARTURE SUCCESS] Passengers: ' + count + ' | Total Gross: $' + gross.toFixed(2);
+    function submitReport() {
+      alert('Report submitted directly to Fleet Owner & Council Transit Inspectors.');
+      document.getElementById('reportModal').style.display = 'none';
     }
-
-    init();
-  </script>
-</body>
-</html>
-`;
-
-export const OWNER_VIEW = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Fleet Owner Financial Dashboard</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 20px; background: #e2e8f0; color: #0f172a; }
-    h1 { color: #166534; font-weight: 700; margin-bottom: 24px; text-transform: uppercase; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
-    .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .card label { font-size: 0.9rem; color: #64748b; font-weight: 500; display: block; margin-bottom: 8px; }
-    .card .val { font-size: 2.2rem; font-weight: 700; color: #15803d; }
-    .card .val.sub { font-size: 1.8rem; color: #0369a1; }
-    .card .val.rank { font-size: 1.8rem; color: #b45309; }
-    .btn-csv {
-      background: #16a34a; color: white; border: none; padding: 12px 20px; border-radius: 8px;
-      font-weight: 600; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
-    }
-    .btn-csv:hover { background: #15803d; }
-    .status-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; background: #dcfce7; color: #15803d; margin-left: 12px; }
-  </style>
-</head>
-<body>
-  <h1>📊 FLEET OWNER FINANCIAL DASHBOARD <span class="status-badge" id="liveIndicator">LIVE SYNC</span></h1>
-  
-  <div class="grid">
-    <div class="card">
-      <label>Net Owner Payout</label>
-      <div class="val" id="ownerNet">$0.00</div>
-    </div>
-    <div class="card">
-      <label>Total Gross Revenue</label>
-      <div class="val sub" id="gross">$0.00</div>
-    </div>
-    <div class="card">
-      <label>Driver Commissions Paid</label>
-      <div class="val sub" id="driverCut">$0.00</div>
-    </div>
-    <div class="card">
-      <label>Rank & Marshal Fees</label>
-      <div class="val rank" id="rankFees">$0.00</div>
-    </div>
-  </div>
-
-  <a href="/api/owner/export-csv" class="btn-csv" download>
-    📥 Download Financial Ledger (CSV)
-  </a>
-
-  <script>
-    function updateDOM(financials) {
-      if (!financials) return;
-      
-      const ownerPayout = financials.totalOwnerPayout !== undefined ? financials.totalOwnerPayout : financials.ownerNetPayout || 0;
-      const totalGross = financials.totalGross !== undefined ? financials.totalGross : financials.grossFare || 0;
-      const driverCut = financials.totalDriverCommission !== undefined ? financials.totalDriverCommission : financials.driverCommission || 0;
-      const rankFees = financials.totalRankFees !== undefined ? financials.totalRankFees : financials.rankFee || 0;
-
-      document.getElementById('ownerNet').innerText = '$' + Number(ownerPayout).toFixed(2);
-      document.getElementById('gross').innerText = '$' + Number(totalGross).toFixed(2);
-      document.getElementById('driverCut').innerText = '$' + Number(driverCut).toFixed(2);
-      document.getElementById('rankFees').innerText = '$' + Number(rankFees).toFixed(2);
-    }
-
-    async function loadStats() {
-      try {
-        const res = await fetch('/api/owner/financials');
-        const data = await res.json();
-        if (data.success && data.summary) {
-          updateDOM(data.summary);
-        } else {
-          // Fallback to shift status if aggregate route is pending
-          const fallbackRes = await fetch('/api/shift/status');
-          const fallbackData = await fallbackRes.json();
-          if (fallbackData.financials) {
-            updateDOM(fallbackData.financials);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load owner financial metrics:', err);
-      }
-    }
-
-    // Connect to Server-Sent Events stream for instant realtime push updates
-    const eventSource = new EventSource('/api/events');
-
-    eventSource.addEventListener('OWNER_FINANCIAL_UPDATE', (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.payload && data.payload.cumulative) {
-          updateDOM(data.payload.cumulative);
-        } else {
-          loadStats();
-        }
-      } catch (err) {
-        loadStats();
-      }
-    });
-
-    eventSource.addEventListener('DEPARTURE_UPDATE', () => loadStats());
-    eventSource.addEventListener('SHIFT_CLOSED', () => loadStats());
-
-    eventSource.onmessage = () => loadStats();
-
-    // Initial load on page mount
-    loadStats();
   </script>
 </body>
 </html>
