@@ -1,5 +1,3 @@
-// apps/crew-app/src/routes/fare-router.js
-
 import { Router } from 'express';
 
 const router = Router();
@@ -30,15 +28,15 @@ router.post('/process-fare', async (req, res) => {
     };
 
     // 2. Automated ZIMRA Presumptive Tax Calculation (3% withholding)
-    const presumptiveTaxUSD = grossFare * 0.03;
-    const netOperatorRevenue = grossFare - presumptiveTaxUSD;
+    const presumptiveTaxUSD = Number((grossFare * 0.03).toFixed(2));
+    const netOperatorRevenue = Number((grossFare - presumptiveTaxUSD).toFixed(2));
 
     // 3. Fiscal Data Management System (FDMS) Payload
     const zimraFiscalData = {
       deviceID: "FDMS-HARARE-0891",
       vrn: vehicleVRN,
       grossAmount: grossFare,
-      taxWithheld: Number(presumptiveTaxUSD.toFixed(2)),
+      taxWithheld: presumptiveTaxUSD,
       currency: "USD",
       timestamp: new Date().toISOString()
     };
@@ -49,8 +47,8 @@ router.post('/process-fare', async (req, res) => {
       payment: paymentResponse,
       taxSplit: {
         grossFareUSD: grossFare,
-        zimraPresumptiveTaxUSD: presumptiveTaxUSD.toFixed(2),
-        netOperatorUSD: netOperatorRevenue.toFixed(2)
+        zimraPresumptiveTaxUSD: presumptiveTaxUSD,
+        netOperatorUSD: netOperatorRevenue
       },
       zimraFDMS: zimraFiscalData,
       zimraFDMSStatus: "FISCAL_RECEIPT_OPENED",
