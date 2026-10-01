@@ -8,15 +8,20 @@ import { QueueEngine } from './queue-engine.js';
 import { FinanceEngine } from './finance-engine.js';
 import { ShiftEngine } from './shift-engine.js';
 import { AuthEngine } from './auth-engine.js';
-import { MARSHAL_VIEW, OWNER_VIEW } from './router-views.js';
+import { 
+  MARSHAL_VIEW, 
+  OWNER_VIEW, 
+  PASSENGER_VIEW, 
+  ENFORCEMENT_VIEW 
+} from './router-views.js';
 import { TelemetryEmulator } from './telemetry-emulator.js';
 import { ExportEngine } from './export-engine.js';
 import { AlertEngine } from './alert-engine.js';
 import { PassengerEngine } from './passenger-engine.js';
-import { PASSENGER_VIEW } from './passenger-view.js';
 import { AnomalyEngine } from './anomaly-engine.js';
 import { LiftEngine } from './lift-engine.js';
 import { MushikashikaTerminalEngine } from './mushikashika-terminal.js';
+import fareRouter from './routes/fare-router.js'; // Micro-service router for fare payment & ZIMRA tax
 
 const PORT = 3000;
 const app = express();
@@ -26,12 +31,15 @@ const sseClients: Set<Response> = new Set();
 const sabhukuEngine = new MushikashikaTerminalEngine();
 
 // ==========================================
-// 🛡️ MIDDLEWARES
+// 🛡️️ MIDDLEWARES & ROUTERS
 // ==========================================
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Payment & ZIMRA Fiscalization Micro-service
+app.use('/api/v1/payments', fareRouter);
 
 // Express Authentication Middleware for Protected Routes
 function authenticateRole(...allowedRoles: string[]) {
@@ -78,6 +86,10 @@ app.get('/sw.js', (_req: Request, res: Response) => {
 
 app.get('/passenger', (_req: Request, res: Response) => {
   res.type('html').send(PASSENGER_VIEW || '<h1>Passenger View Unavailable</h1>');
+});
+
+app.get('/enforcement', (_req: Request, res: Response) => {
+  res.type('html').send(ENFORCEMENT_VIEW || '<h1>Enforcement View Unavailable</h1>');
 });
 
 app.get('/marshal', (_req: Request, res: Response) => {
@@ -731,7 +743,8 @@ mockDb.trustScores.set('driver-001', 85);
 server.listen(PORT, () => {
   console.log(`\n==================================================`);
   console.log(` 🚀 BULAWAYO FLEET SERVER LIVE AT: http://localhost:${PORT}`);
-  console.log(` 📱 PASSENGER APP AVAILABLE AT: http://localhost:${PORT}/passenger`);
+  console.log(` 📱 PASSENGER APP AVAILABLE AT: http://localhost:${PORT}/passenger`);zl
+  console.log(` 🚔 ENFORCEMENT CONSOLE AT: http://localhost:${PORT}/enforcement`);
   console.log(` 👮 MARSHAL VIEW AVAILABLE AT: http://localhost:${PORT}/marshal`);
   console.log(` 👑 SABHUKU TERMINAL AVAILABLE AT: http://localhost:${PORT}/terminal/sabhuku`);
   console.log(` 🏢 OWNER VIEW AVAILABLE AT: http://localhost:${PORT}/owner`);
